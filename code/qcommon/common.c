@@ -3118,7 +3118,12 @@ void Com_Frame( void ) {
 	if(!com_timedemo->integer)
 	{
 		if(com_dedicated->integer)
-			minMsec = SV_FrameMsec();
+		{
+			if(Cvar_VariableIntegerValue("sv_turbo") > 0)
+				minMsec = 0;
+			else
+				minMsec = SV_FrameMsec();
+		}
 		else
 		{
 			if(com_minimized->integer && com_maxfpsMinimized->integer > 0)
@@ -3189,7 +3194,17 @@ void Com_Frame( void ) {
 		timeBeforeServer = Sys_Milliseconds ();
 	}
 
-	SV_Frame( msec );
+	if ( com_sv_running->integer && Cvar_VariableIntegerValue( "sv_turbo" ) > 0 ) {
+		int turboSteps = Cvar_VariableIntegerValue( "sv_turboSteps" );
+
+		if ( turboSteps < 1 ) {
+			turboSteps = 1;
+		}
+
+		SV_TurboFrame( turboSteps );
+	} else {
+		SV_Frame( msec );
+	}
 
 	// if "dedicated" has been modified, start up
 	// or shut down the client system.

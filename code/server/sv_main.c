@@ -32,6 +32,8 @@ server_t		sv;					// local server
 vm_t			*gvm = NULL;				// game virtual machine
 
 cvar_t	*sv_fps = NULL;			// time rate for running non-clients
+cvar_t	*sv_turbo = NULL;		// run server frames as fast as possible
+cvar_t	*sv_turboSteps = NULL;	// server frames per main loop iteration in turbo mode
 cvar_t	*sv_timeout;			// seconds without any message
 cvar_t	*sv_zombietime;			// seconds to sink messages after disconnect
 cvar_t	*sv_rconPassword;		// password for remote server commands
@@ -1157,10 +1159,49 @@ void SV_Frame( int msec ) {
 	SV_CheckTimeouts();
 
 	// send messages back to the clients
-	SV_SendClientMessages();
+	if ( !sv_turbo || !sv_turbo->integer ) {
+		SV_SendClientMessages();
 
-	// send a heartbeat to the master if needed
-	SV_MasterHeartbeat(HEARTBEAT_FOR_MASTER);
+		// send a heartbeat to the master if needed
+		SV_MasterHeartbeat(HEARTBEAT_FOR_MASTER);
+	}
+}
+
+/*
+==================
+SV_TurboFrame
+
+Run a number of fixed server frames without waiting for real time.
+Intended for headless bot training; network clients are not serviced.
+==================
+*/
+void SV_TurboFrame( int steps ) {
+	int		frameMsec;
+	int		i;
+
+	if ( !com_sv_running->integer || steps < 1 ) {
+		return;
+	}
+
+	if ( sv_fps->integer < 1 ) {
+		Cvar_Set( "sv_fps", "10" );
+	}
+
+	frameMsec = 1000 / sv_fps->integer * com_timescale->value;
+	if ( frameMsec < 1 ) {
+		frameMsec = 1;
+	}
+
+	for ( i = 0; i < steps; i++ ) {
+		if ( !com_sv_running->integer ) {
+			break;
+		}
+
+		// SV_Frame() consumes one frame from the residual and calls
+		// SV_BotFrame() before simulating it.
+		sv.timeResidual = 0;
+		SV_Frame( frameMsec );
+	}
 }
 
 /*
