@@ -40,6 +40,7 @@ SYSTEM CONFIGURATION MENU
 #define ID_SOUND			12
 #define ID_NETWORK			13
 #define ID_BACK				14
+#define ID_RAYTRACING		15
 
 #define VERTICAL_SPACING	34
 
@@ -51,6 +52,7 @@ typedef struct {
 	menubitmap_s	framer;
 
 	menutext_s		graphics;
+	menutext_s		raytracing;
 	menutext_s		display;
 	menutext_s		sound;
 	menutext_s		network;
@@ -73,6 +75,10 @@ static void Options_Event( void* ptr, int event ) {
 	switch( ((menucommon_s*)ptr)->id ) {
 	case ID_GRAPHICS:
 		UI_GraphicsOptionsMenu();
+		break;
+
+	case ID_RAYTRACING:
+		UI_RayTracingOptionsMenu();
 		break;
 
 	case ID_DISPLAY:
@@ -152,7 +158,7 @@ void Options_MenuInit( void ) {
 	s_options.framer.width  	   = 256;
 	s_options.framer.height  	   = 334;
 
-	y = 168;
+	y = 152;
 	s_options.graphics.generic.type		= MTYPE_PTEXT;
 	s_options.graphics.generic.flags	= QMF_CENTER_JUSTIFY|QMF_PULSEIFFOCUS;
 	s_options.graphics.generic.callback	= Options_Event;
@@ -162,6 +168,17 @@ void Options_MenuInit( void ) {
 	s_options.graphics.string			= "GRAPHICS";
 	s_options.graphics.color			= color_red;
 	s_options.graphics.style			= UI_CENTER;
+
+	y += VERTICAL_SPACING;
+	s_options.raytracing.generic.type		= MTYPE_PTEXT;
+	s_options.raytracing.generic.flags		= QMF_CENTER_JUSTIFY|QMF_PULSEIFFOCUS;
+	s_options.raytracing.generic.callback	= Options_Event;
+	s_options.raytracing.generic.id			= ID_RAYTRACING;
+	s_options.raytracing.generic.x			= 320;
+	s_options.raytracing.generic.y			= y;
+	s_options.raytracing.string				= "RAY TRACING";
+	s_options.raytracing.color				= color_red;
+	s_options.raytracing.style				= UI_CENTER;
 
 	y += VERTICAL_SPACING;
 	s_options.display.generic.type		= MTYPE_PTEXT;
@@ -211,6 +228,7 @@ void Options_MenuInit( void ) {
 	Menu_AddItem( &s_options.menu, ( void * ) &s_options.framel );
 	Menu_AddItem( &s_options.menu, ( void * ) &s_options.framer );
 	Menu_AddItem( &s_options.menu, ( void * ) &s_options.graphics );
+	Menu_AddItem( &s_options.menu, ( void * ) &s_options.raytracing );
 	Menu_AddItem( &s_options.menu, ( void * ) &s_options.display );
 	Menu_AddItem( &s_options.menu, ( void * ) &s_options.sound );
 	Menu_AddItem( &s_options.menu, ( void * ) &s_options.network );

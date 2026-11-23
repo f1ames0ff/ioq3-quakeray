@@ -1,0 +1,3 @@
+[submodule "code/quakeraysdk"]
+	path = code/quakeraysdk
+	url = https://github.com/f1ames0ff/QuakeRaySDK.git

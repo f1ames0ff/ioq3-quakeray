@@ -3258,7 +3258,11 @@ void CL_InitRef( void ) {
 	Com_Printf( "----- Initializing Renderer ----\n" );
 
 #ifdef USE_RENDERER_DLOPEN
+#ifdef DEFAULT_RENDERER_QRAY
+	cl_renderer = Cvar_Get("cl_renderer", "qray", CVAR_ARCHIVE | CVAR_LATCH);
+#else
 	cl_renderer = Cvar_Get("cl_renderer", "opengl2", CVAR_ARCHIVE | CVAR_LATCH);
+#endif
 
 	Com_sprintf(dllName, sizeof(dllName), "renderer_%s" DLL_EXT, cl_renderer->string);
 
@@ -3268,6 +3272,14 @@ void CL_InitRef( void ) {
 		Cvar_ForceReset("cl_renderer");
 
 		Com_sprintf(dllName, sizeof(dllName), "renderer_%s" DLL_EXT, cl_renderer->resetString);
+		rendererLib = Sys_LoadDll(dllName, qfalse);
+	}
+
+	if(!rendererLib && strcmp(cl_renderer->string, "opengl2"))
+	{
+		Com_Printf("failed:\n\"%s\"\n", Sys_LibraryError());
+		Cvar_Set("cl_renderer", "opengl2");
+		Com_sprintf(dllName, sizeof(dllName), "renderer_opengl2" DLL_EXT);
 		rendererLib = Sys_LoadDll(dllName, qfalse);
 	}
 

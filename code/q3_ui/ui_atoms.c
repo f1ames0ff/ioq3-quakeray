@@ -976,6 +976,7 @@ void UI_Cache_f( void ) {
 	ServerOptions_Cache();
 	DriverInfo_Cache();
 	GraphicsOptions_Cache();
+	UI_RayTracingOptionsMenu_Cache();
 	UI_DisplayOptionsMenu_Cache();
 	UI_SoundOptionsMenu_Cache();
 	UI_NetworkOptionsMenu_Cache();
@@ -1048,6 +1049,11 @@ qboolean UI_ConsoleCommand( int realTime ) {
 
 	if ( Q_stricmp (cmd, "ui_cdkey") == 0 ) {
 		UI_CDKeyMenu_f();
+		return qtrue;
+	}
+
+	if ( Q_stricmp (cmd, "ui_raytracing") == 0 ) {
+		UI_RayTracingOptionsMenu();
 		return qtrue;
 	}
 

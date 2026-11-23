@@ -721,6 +721,12 @@ void UI_SaveConfigMenu_Cache( void );
 void UI_SaveConfigMenu( void );
 
 //
+// ui_raytracing.c
+//
+void UI_RayTracingOptionsMenu_Cache( void );
+void UI_RayTracingOptionsMenu( void );
+
+//
 // ui_display.c
 //
 void UI_DisplayOptionsMenu_Cache( void );

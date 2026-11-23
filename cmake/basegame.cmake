@@ -98,6 +98,7 @@ set(UI_SOURCES
     ${SOURCE_DIR}/q3_ui/ui_playersettings.c
     ${SOURCE_DIR}/q3_ui/ui_preferences.c
     ${SOURCE_DIR}/q3_ui/ui_qmenu.c
+    ${SOURCE_DIR}/q3_ui/ui_raytracing.c
     ${SOURCE_DIR}/q3_ui/ui_removebots.c
     ${SOURCE_DIR}/q3_ui/ui_saveconfig.c
     ${SOURCE_DIR}/q3_ui/ui_serverinfo.c

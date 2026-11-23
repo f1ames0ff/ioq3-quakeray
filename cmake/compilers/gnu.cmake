@@ -11,12 +11,14 @@ set(ASM_SOURCES
     ${SOURCE_DIR}/asm/snapvector.c
 )
 
-add_compile_options(-Wall -Wimplicit -Wshadow
-    -Wstrict-prototypes -Wformat=2  -Wformat-security
+set(IOQ3_C_WARNING_FLAGS
+    -Wall -Wimplicit -Wshadow
+    -Wstrict-prototypes -Wformat=2 -Wformat-security
     -Wstrict-aliasing=2 -Wmissing-format-attribute
-    -Wdisabled-optimization -Werror-implicit-function-declaration)
-
-add_compile_options(-Wno-format-zero-length -Wno-format-nonliteral)
+    -Wdisabled-optimization -Werror-implicit-function-declaration
+    -Wno-format-zero-length -Wno-format-nonliteral
+)
+add_compile_options("$<$<COMPILE_LANGUAGE:C>:${IOQ3_C_WARNING_FLAGS}>")
 
 # There are lots of instances of union based aliasing in the code
 # that rely on the compiler not optimising them away, so disable it

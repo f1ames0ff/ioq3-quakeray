@@ -248,6 +248,7 @@ GRAPHICS OPTIONS MENU
 #define ID_SOUND		108
 #define ID_NETWORK		109
 #define ID_RATIO		110
+#define ID_RAYTRACING	111
 
 typedef struct {
 	menuframework_s	menu;
@@ -257,6 +258,7 @@ typedef struct {
 	menubitmap_s	framer;
 
 	menutext_s		graphics;
+	menutext_s		raytracing;
 	menutext_s		display;
 	menutext_s		sound;
 	menutext_s		network;
@@ -800,6 +802,11 @@ static void GraphicsOptions_Event( void* ptr, int event ) {
 	case ID_GRAPHICS:
 		break;
 
+	case ID_RAYTRACING:
+		UI_PopMenu();
+		UI_RayTracingOptionsMenu();
+		break;
+
 	case ID_DISPLAY:
 		UI_PopMenu();
 		UI_DisplayOptionsMenu();
@@ -1074,12 +1081,22 @@ void GraphicsOptions_MenuInit( void )
 	s_graphicsoptions.graphics.style			= UI_RIGHT;
 	s_graphicsoptions.graphics.color			= color_red;
 
+	s_graphicsoptions.raytracing.generic.type		= MTYPE_PTEXT;
+	s_graphicsoptions.raytracing.generic.flags		= QMF_RIGHT_JUSTIFY|QMF_PULSEIFFOCUS;
+	s_graphicsoptions.raytracing.generic.id			= ID_RAYTRACING;
+	s_graphicsoptions.raytracing.generic.callback	= GraphicsOptions_Event;
+	s_graphicsoptions.raytracing.generic.x			= 216;
+	s_graphicsoptions.raytracing.generic.y			= 240 - PROP_HEIGHT;
+	s_graphicsoptions.raytracing.string				= "RAY TRACING";
+	s_graphicsoptions.raytracing.style				= UI_RIGHT;
+	s_graphicsoptions.raytracing.color				= color_red;
+
 	s_graphicsoptions.display.generic.type		= MTYPE_PTEXT;
 	s_graphicsoptions.display.generic.flags		= QMF_RIGHT_JUSTIFY|QMF_PULSEIFFOCUS;
 	s_graphicsoptions.display.generic.id		= ID_DISPLAY;
 	s_graphicsoptions.display.generic.callback	= GraphicsOptions_Event;
 	s_graphicsoptions.display.generic.x			= 216;
-	s_graphicsoptions.display.generic.y			= 240 - PROP_HEIGHT;
+	s_graphicsoptions.display.generic.y			= 240;
 	s_graphicsoptions.display.string			= "DISPLAY";
 	s_graphicsoptions.display.style				= UI_RIGHT;
 	s_graphicsoptions.display.color				= color_red;
@@ -1089,7 +1106,7 @@ void GraphicsOptions_MenuInit( void )
 	s_graphicsoptions.sound.generic.id			= ID_SOUND;
 	s_graphicsoptions.sound.generic.callback	= GraphicsOptions_Event;
 	s_graphicsoptions.sound.generic.x			= 216;
-	s_graphicsoptions.sound.generic.y			= 240;
+	s_graphicsoptions.sound.generic.y			= 240 + PROP_HEIGHT;
 	s_graphicsoptions.sound.string				= "SOUND";
 	s_graphicsoptions.sound.style				= UI_RIGHT;
 	s_graphicsoptions.sound.color				= color_red;
@@ -1099,7 +1116,7 @@ void GraphicsOptions_MenuInit( void )
 	s_graphicsoptions.network.generic.id		= ID_NETWORK;
 	s_graphicsoptions.network.generic.callback	= GraphicsOptions_Event;
 	s_graphicsoptions.network.generic.x			= 216;
-	s_graphicsoptions.network.generic.y			= 240 + PROP_HEIGHT;
+	s_graphicsoptions.network.generic.y			= 240 + 2 * PROP_HEIGHT;
 	s_graphicsoptions.network.string			= "NETWORK";
 	s_graphicsoptions.network.style				= UI_RIGHT;
 	s_graphicsoptions.network.color				= color_red;
@@ -1255,6 +1272,7 @@ void GraphicsOptions_MenuInit( void )
 	Menu_AddItem( &s_graphicsoptions.menu, ( void * ) &s_graphicsoptions.framer );
 
 	Menu_AddItem( &s_graphicsoptions.menu, ( void * ) &s_graphicsoptions.graphics );
+	Menu_AddItem( &s_graphicsoptions.menu, ( void * ) &s_graphicsoptions.raytracing );
 	Menu_AddItem( &s_graphicsoptions.menu, ( void * ) &s_graphicsoptions.display );
 	Menu_AddItem( &s_graphicsoptions.menu, ( void * ) &s_graphicsoptions.sound );
 	Menu_AddItem( &s_graphicsoptions.menu, ( void * ) &s_graphicsoptions.network );

@@ -42,6 +42,7 @@ NETWORK OPTIONS MENU
 #define ID_NETWORK			13
 #define ID_RATE				14
 #define ID_BACK				15
+#define ID_RAYTRACING		16
 
 
 static const char *rate_items[] = {
@@ -61,6 +62,7 @@ typedef struct {
 	menubitmap_s	framer;
 
 	menutext_s		graphics;
+	menutext_s		raytracing;
 	menutext_s		display;
 	menutext_s		sound;
 	menutext_s		network;
@@ -87,6 +89,11 @@ static void UI_NetworkOptionsMenu_Event( void* ptr, int event ) {
 	case ID_GRAPHICS:
 		UI_PopMenu();
 		UI_GraphicsOptionsMenu();
+		break;
+
+	case ID_RAYTRACING:
+		UI_PopMenu();
+		UI_RayTracingOptionsMenu();
 		break;
 
 	case ID_DISPLAY:
@@ -176,12 +183,22 @@ static void UI_NetworkOptionsMenu_Init( void ) {
 	networkOptionsInfo.graphics.style				= UI_RIGHT;
 	networkOptionsInfo.graphics.color				= color_red;
 
+	networkOptionsInfo.raytracing.generic.type		= MTYPE_PTEXT;
+	networkOptionsInfo.raytracing.generic.flags		= QMF_RIGHT_JUSTIFY|QMF_PULSEIFFOCUS;
+	networkOptionsInfo.raytracing.generic.id		= ID_RAYTRACING;
+	networkOptionsInfo.raytracing.generic.callback	= UI_NetworkOptionsMenu_Event;
+	networkOptionsInfo.raytracing.generic.x			= 216;
+	networkOptionsInfo.raytracing.generic.y			= 240 - PROP_HEIGHT;
+	networkOptionsInfo.raytracing.string			= "RAY TRACING";
+	networkOptionsInfo.raytracing.style				= UI_RIGHT;
+	networkOptionsInfo.raytracing.color				= color_red;
+
 	networkOptionsInfo.display.generic.type			= MTYPE_PTEXT;
 	networkOptionsInfo.display.generic.flags		= QMF_RIGHT_JUSTIFY|QMF_PULSEIFFOCUS;
 	networkOptionsInfo.display.generic.id			= ID_DISPLAY;
 	networkOptionsInfo.display.generic.callback		= UI_NetworkOptionsMenu_Event;
 	networkOptionsInfo.display.generic.x			= 216;
-	networkOptionsInfo.display.generic.y			= 240 - PROP_HEIGHT;
+	networkOptionsInfo.display.generic.y			= 240;
 	networkOptionsInfo.display.string				= "DISPLAY";
 	networkOptionsInfo.display.style				= UI_RIGHT;
 	networkOptionsInfo.display.color				= color_red;
@@ -191,7 +208,7 @@ static void UI_NetworkOptionsMenu_Init( void ) {
 	networkOptionsInfo.sound.generic.id				= ID_SOUND;
 	networkOptionsInfo.sound.generic.callback		= UI_NetworkOptionsMenu_Event;
 	networkOptionsInfo.sound.generic.x				= 216;
-	networkOptionsInfo.sound.generic.y				= 240;
+	networkOptionsInfo.sound.generic.y				= 240 + PROP_HEIGHT;
 	networkOptionsInfo.sound.string					= "SOUND";
 	networkOptionsInfo.sound.style					= UI_RIGHT;
 	networkOptionsInfo.sound.color					= color_red;
@@ -201,7 +218,7 @@ static void UI_NetworkOptionsMenu_Init( void ) {
 	networkOptionsInfo.network.generic.id			= ID_NETWORK;
 	networkOptionsInfo.network.generic.callback		= UI_NetworkOptionsMenu_Event;
 	networkOptionsInfo.network.generic.x			= 216;
-	networkOptionsInfo.network.generic.y			= 240 + PROP_HEIGHT;
+	networkOptionsInfo.network.generic.y			= 240 + 2 * PROP_HEIGHT;
 	networkOptionsInfo.network.string				= "NETWORK";
 	networkOptionsInfo.network.style				= UI_RIGHT;
 	networkOptionsInfo.network.color				= color_red;
@@ -231,6 +248,7 @@ static void UI_NetworkOptionsMenu_Init( void ) {
 	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.framel );
 	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.framer );
 	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.graphics );
+	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.raytracing );
 	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.display );
 	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.sound );
 	Menu_AddItem( &networkOptionsInfo.menu, ( void * ) &networkOptionsInfo.network );
