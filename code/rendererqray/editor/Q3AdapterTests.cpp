@@ -718,16 +718,81 @@ bool CheckOverlaysPresent(const EditorScene &scene, const char *const *names, si
 
 bool VerifyTourney1NoLeakedSurfaces(const EditorScene &scene)
 {
-    static constexpr const char *kForbidden[] = {
+    if (!Check(FindSceneSurface(scene, "textures/sfx/fog_timdm1") == nullptr &&
+                   !HasOverlaySurface(scene, "textures/sfx/fog_timdm1"),
+               "q3tourney1 leaked fog surface"))
+    {
+        return false;
+    }
+
+    static constexpr const char *kOverlayOnlyNames[] = {
         "textures/sfx/beam_dusty2",
-        "textures/sfx/fog_timdm1",
         "textures/sfx/teslacoil",
     };
-    for (const EditorSurface &surf : scene.surfaces)
+    for (const char *name : kOverlayOnlyNames)
     {
-        for (const char *name : kForbidden)
+        const EditorSurface *surf = FindSceneSurface(scene, name);
+        if (!Check(surf != nullptr && surf->isOverlayOnly,
+                   "q3tourney1 overlay surface must be marked isOverlayOnly"))
         {
-            if (!Check(surf.textureName != name, "q3tourney1 leaked non-traced overlay/fog surface"))
+            return false;
+        }
+    }
+    return true;
+}
+
+const EditorAliasInstance *FindAliasInstanceById(const EditorScene &scene, uint32_t id)
+{
+    for (const EditorAliasInstance &inst : scene.aliasInstances)
+    {
+        if (inst.aliasInstanceId == id)
+        {
+            return &inst;
+        }
+    }
+    return nullptr;
+}
+
+bool CheckClusteredSurfaceBounds(const EditorScene &scene, const char *name, bool expectedOverlayOnly,
+                                 size_t minClusters, size_t maxClusters)
+{
+    const EditorSurface *surf = FindSceneSurface(scene, name);
+    if (!Check(surf != nullptr && surf->isOverlayOnly == expectedOverlayOnly && !surf->faces.empty(),
+               name))
+    {
+        return false;
+    }
+
+    std::vector<uint32_t> ids;
+    for (const EditorSurfaceFace &face : surf->faces)
+    {
+        if (!Check(face.aliasInstanceId != 0u, name))
+        {
+            return false;
+        }
+        if (std::find(ids.begin(), ids.end(), face.aliasInstanceId) == ids.end())
+        {
+            ids.push_back(face.aliasInstanceId);
+        }
+    }
+
+    if (!Check(ids.size() >= minClusters && ids.size() <= maxClusters, name))
+    {
+        return false;
+    }
+
+    for (uint32_t id : ids)
+    {
+        const EditorAliasInstance *inst = FindAliasInstanceById(scene, id);
+        if (!Check(inst != nullptr && inst->hasBounds && inst->uniqueID == 0u &&
+                       inst->modelSizeMeters > 0.0f,
+                   name))
+        {
+            return false;
+        }
+        for (int axis = 0; axis < 3; axis++)
+        {
+            if (!Check(inst->boundsMax[axis] - inst->boundsMin[axis] >= 3.99f, name))
             {
                 return false;
             }
@@ -736,16 +801,63 @@ bool VerifyTourney1NoLeakedSurfaces(const EditorScene &scene)
     return true;
 }
 
+bool VerifyTourney1PickingAndBounds(const EditorScene &scene)
+{
+    static constexpr const char *kOverlayOnlyPicked[] = {
+        "textures/sfx/teslacoil",
+        "textures/sfx/beam_dusty2",
+        "models/mapobjects/bitch/orb",
+        "models/mapobjects/flares/electric",
+        "textures/sfx/flame2",
+    };
+    for (const char *name : kOverlayOnlyPicked)
+    {
+        if (!CheckClusteredSurfaceBounds(scene, name, true, 1u, 100u))
+        {
+            return false;
+        }
+    }
+
+    const EditorSurface *orb = FindSceneSurface(scene, "models/mapobjects/bitch/orb");
+    const EditorAliasInstance *orbInst =
+        orb != nullptr ? FindAliasInstanceById(scene, orb->faces[0].aliasInstanceId) : nullptr;
+    if (!Check(orbInst != nullptr && (orbInst->boundsMax[1] - orbInst->boundsMin[1]) > 10.0f,
+               "q3tourney1 bitch/orb crossed autoSprite quad must expand 3D bounds"))
+    {
+        return false;
+    }
+
+    const EditorSurface *blocks = FindSceneSurface(scene, "textures/gothic_block/blocks11b");
+    const bool blocksOk = blocks != nullptr && !blocks->isOverlayOnly && !blocks->faces.empty() &&
+                          std::all_of(blocks->faces.begin(), blocks->faces.end(),
+                                      [](const EditorSurfaceFace &f) {
+                                          return f.aliasInstanceId == 0u;
+                                      });
+
+    return Check(blocksOk, "q3tourney1 traced world surface must not have aliasInstanceId") &&
+           CheckClusteredSurfaceBounds(scene, "models/mapobjects/bitch/bitch", false, 1u, 1u) &&
+           CheckClusteredSurfaceBounds(scene, "models/mapobjects/gratelamp/gratetorch2", false, 3u,
+                                       3u) &&
+           CheckClusteredSurfaceBounds(scene, "textures/sfx/beam_dusty2", true, 27u, 27u) &&
+           CheckClusteredSurfaceBounds(scene, "textures/sfx/teslacoil", true, 9u, 9u);
+}
+
 bool VerifyTourney1SkyAndTextures(const EditorScene &scene)
 {
     const EditorTexture *sky = FindSceneTexture(scene, "textures/skies/nightsky_xian_dm1");
     const EditorTexture *ceil50k = FindSceneTexture(scene, "textures/base_light/xceil1_39_50k");
     const EditorTexture *demonlt = FindSceneTexture(scene, "textures/sfx/demonltblackfinal");
+    const EditorTexture *atech = FindSceneTexture(scene, "textures/base_wall/atech1_alpha");
+    const EditorTexture *flame2 = FindSceneTexture(scene, "textures/sfx/flame2");
 
     const bool skyOk = sky != nullptr && !sky->isEmissiveShader && sky->fullbright.empty();
     const bool emissivesOk = ceil50k != nullptr && ceil50k->isEmissiveShader &&
                              !ceil50k->fullbright.empty() && demonlt != nullptr &&
-                             demonlt->isEmissiveShader && !demonlt->fullbright.empty();
+                             demonlt->isEmissiveShader && !demonlt->fullbright.empty() &&
+                             atech != nullptr &&
+                             atech->defaultEmissiveTexture == "textures/sfx/hologirl" &&
+                             flame2 != nullptr &&
+                             flame2->defaultEmissiveTexture == "textures/sfx/flame1";
     return Check(skyOk, "q3tourney1 sky must not emit DTAL light") &&
            Check(emissivesOk, "q3tourney1 DTAL emission textures missing");
 }
@@ -775,6 +887,7 @@ bool VerifyTourney1EmissionsAndLights(const EditorScene &scene)
 
     const bool lavaOk = lavaXdm1 != nullptr && lavaXdm1->kind == EditorSurfaceKind::Lava &&
                         lavaXdm1Tex != nullptr && lavaXdm1Tex->isEmissiveShader &&
+                        lavaXdm1Tex->defaultEmissiveTexture == "textures/liquids/lavahell" &&
                         hasCeil50kLight && hasDemonLight && hasFlame2Light &&
                         scene.lights.size() == scene.bspLights.size();
     const bool cutoutAndCapOk =
@@ -822,6 +935,7 @@ bool VerifyTourney1RetailScene(const EditorScene &scene)
                           scene.sunDegrees < 0.0f && scene.lights.size() >= 15u;
     return Check(headerOk, "q3tourney1 sky/sun/lights mismatch") &&
            VerifyTourney1NoLeakedSurfaces(scene) &&
+           VerifyTourney1PickingAndBounds(scene) &&
            VerifyTourney1EmissionsAndLights(scene) &&
            VerifyTourney1FlameAndOrbOverlays(scene);
 }
@@ -945,19 +1059,40 @@ bool VerifyRetailMapSpecificChecks(const std::string &mapPath, const EditorScene
     }
     if (mapPath == "maps/q3dm0.bsp")
     {
-        return Check(FindSceneSurface(scene, "models/mapobjects/console/sphere2") == nullptr &&
+        const EditorSurface *sphere2 = FindSceneSurface(scene, "models/mapobjects/console/sphere2");
+        return Check(sphere2 != nullptr && sphere2->isOverlayOnly &&
                          HasOverlaySurface(scene, "models/mapobjects/console/sphere2"),
-                     "q3dm0 sphere2 autoSprite must be raster overlay");
+                     "q3dm0 sphere2 autoSprite must be isOverlayOnly + raster overlay");
     }
     if (mapPath == "maps/q3dm10.bsp")
     {
         const EditorSurface *clang =
             FindSceneSurface(scene, "textures/base_floor/clang_floor3blava");
-        return Check(FindSceneSurface(scene, "textures/base_trim/wires01") == nullptr &&
+        const EditorSurface *wires = FindSceneSurface(scene, "textures/base_trim/wires01");
+        const EditorSurface *bapho = FindSceneSurface(scene, "models/mapobjects/baph/bapholamp_fx");
+        size_t baphoCount = 0;
+        bool baphoBoundsOk = true;
+        for (const EditorAliasInstance &inst : scene.aliasInstances)
+        {
+            if (inst.textureName == "models/mapobjects/baph/bapholamp_fx")
+            {
+                baphoCount++;
+                baphoBoundsOk &= inst.hasBounds &&
+                                 (inst.boundsMax[1] - inst.boundsMin[1] > 10.0f) &&
+                                 (inst.boundsMax[0] - inst.boundsMin[0] < 120.0f);
+            }
+            if (inst.textureName == "textures/base_trim/wires01")
+            {
+                baphoBoundsOk &= inst.hasBounds &&
+                                 (inst.boundsMax[2] - inst.boundsMin[2] > 10.0f);
+            }
+        }
+        return Check(wires != nullptr && wires->isOverlayOnly &&
                          HasOverlaySurface(scene, "textures/base_trim/wires01") &&
                          HasOverlaySurface(scene, "textures/base_trim/wires01_ass") &&
-                         clang != nullptr && !clang->isCutoutUnderlay,
-                     "q3dm10 wires01 autoSprite2 or clang_floor3blava classification failed");
+                         bapho != nullptr && bapho->isOverlayOnly && baphoCount == 2u &&
+                         baphoBoundsOk && clang != nullptr && !clang->isCutoutUnderlay,
+                     "q3dm10 wires01/bapholamp_fx bounds or clang_floor3blava check failed");
     }
     if (mapPath == "maps/q3dm6.bsp")
     {
@@ -1327,8 +1462,11 @@ bool VerifyPrefixAndSessionPaths(const std::filesystem::path &tempDir)
 
 bool VerifyEdgeCaseBspScene(const EditorScene &scene)
 {
+    const EditorSurface *overlayFlame = FindSceneSurface(scene, "textures/test/overlay_flame");
     const bool mirrorMarked = scene.textures.size() >= 3u && scene.textures[2].isMirrorShader &&
-                              scene.surfaces.size() == 2u;
+                              scene.surfaces.size() == 3u && overlayFlame != nullptr &&
+                              overlayFlame->isOverlayOnly &&
+                              FindSceneSurface(scene, "textures/test/fog_volume") == nullptr;
     const bool overlayLightTinted = scene.lights.size() == 1u && scene.bspLights.size() == 1u &&
                                     scene.lights[0].tint[0] > scene.lights[0].tint[2] + 0.3f;
     const bool skyOk = scene.skyboxName.empty() && scene.generatedSkyboxSize == 64u &&
@@ -1568,8 +1706,9 @@ bool VerifyCutoutAuxShadersAndWave(const Q3ShaderDatabase &db)
     const Q3ShaderDef *tallFlame = db.Find("textures/test/torch_tall");
 
     const bool auxOk = rotCutout != nullptr && rotCutout->cutoutFrameUnderlay &&
-                       rotCutout->baseStageIndex == 2u && pewter != nullptr &&
-                       pewter->metallicEnvBase && pewter->tracedBase;
+                       rotCutout->baseStageIndex == 2u &&
+                       rotCutout->emissionMaskMap == "textures/sfx/firegorre.tga" &&
+                       pewter != nullptr && pewter->metallicEnvBase && pewter->tracedBase;
     const bool deformOk =
         tallFlame != nullptr && tallFlame->autoSprite2 && tallFlame->deformWave == Q3ShaderWaveType::Sin;
     const bool waveOk =
@@ -1639,7 +1778,15 @@ bool VerifyCutoutSceneLightsAndOverlays(const EditorScene &scene)
     const bool uvIsolated = tracedCutout != nullptr && tracedCutout->isCutoutUnderlay &&
                             !tracedCutout->vertices.empty() &&
                             std::fabs(tracedCutout->vertices[1].texCoord[0] - 1.0f) < 1e-4f;
-    const bool torchSeparated = FindSceneSurface(scene, "textures/test/torch_flame") == nullptr &&
+    const EditorSurface *torch = FindSceneSurface(scene, "textures/test/torch_flame");
+    const EditorAliasInstance *torchInst =
+        (torch != nullptr && !torch->faces.empty())
+            ? FindAliasInstanceById(scene, torch->faces[0].aliasInstanceId)
+            : nullptr;
+    const bool torchSeparated = torch != nullptr && torch->isOverlayOnly &&
+                                torch->faces.size() == 2u && torchInst != nullptr &&
+                                torchInst->hasBounds && torchInst->uniqueID == 0u &&
+                                (torchInst->boundsMax[0] - torchInst->boundsMin[0]) > 10.0f &&
                                 HasOverlaySurface(scene, "textures/test/torch_flame");
     const bool waterTracedOnly = FindSceneSurface(scene, "textures/test/water_pool") != nullptr &&
                                  !HasOverlaySurface(scene, "textures/test/water_pool");
@@ -2281,6 +2428,331 @@ textures/test/multi_part
     return VerifySurfaceLightsCountsAndMetadata(scene);
 }
 
+std::vector<uint8_t> BuildAutoSpriteCrossBoundsTestBsp()
+{
+    std::vector<uint8_t> bytes(8 + 17 * 8, 0);
+    std::memcpy(bytes.data(), "IBSP", 4);
+    const int32_t version = 46;
+    std::memcpy(bytes.data() + 4, &version, 4);
+    auto writeLump = [&](int idx, const void *data, size_t len) {
+        TestQ3Lump lump{ int32_t(bytes.size()), int32_t(len) };
+        std::memcpy(bytes.data() + 8 + idx * 8, &lump, sizeof(lump));
+        AppendStructBytes(bytes, data, len);
+    };
+    const std::string ents = "{\n\"classname\" \"worldspawn\"\n}\n";
+    writeLump(0, ents.data(), ents.size() + 1);
+    TestQ3Shader shaders[2] = {};
+    std::snprintf(shaders[0].shader, 64, "textures/test/multi_sprite");
+    std::snprintf(shaders[1].shader, 64, "textures/test/horiz_wire");
+    writeLump(1, shaders, sizeof(shaders));
+    TestQ3Plane plane{ { 1.0f, 0.0f, 0.0f }, 0.0f };
+    writeLump(2, &plane, sizeof(plane));
+    TestQ3Node node{};
+    node.children[0] = -1;
+    node.children[1] = -2;
+    writeLump(3, &node, sizeof(node));
+    TestQ3Leaf leafs[2] = { {}, {} };
+    leafs[1].cluster = -1;
+    writeLump(4, leafs, sizeof(leafs));
+
+    std::vector<TestQ3DrawVert> verts;
+    std::vector<int32_t> indices;
+    std::vector<TestQ3Surface> surfs;
+    AppendTestQuad(verts, indices, surfs, 0, 1, -200.0f, -150.0f, 100.0f, 100.0f, 10.0f, 60.0f);
+    AppendTestQuad(verts, indices, surfs, 0, 1, 150.0f, 200.0f, 100.0f, 100.0f, 10.0f, 60.0f);
+    surfs[0].numVerts = 8;
+    surfs[0].numIndexes = 12;
+    for (int i = 6; i < 12; i++)
+    {
+        indices[size_t(i)] += 4;
+    }
+    surfs.pop_back();
+    AppendTestQuad(verts, indices, surfs, 1, 1, 0.0f, 80.0f, -10.0f, 10.0f, 200.0f, 200.0f);
+
+    TestQ3Model model{};
+    model.numSurfaces = int32_t(surfs.size());
+    writeLump(7, &model, sizeof(model));
+    writeLump(10, verts.data(), verts.size() * sizeof(TestQ3DrawVert));
+    writeLump(11, indices.data(), indices.size() * sizeof(int32_t));
+    writeLump(13, surfs.data(), surfs.size() * sizeof(TestQ3Surface));
+    uint8_t vis[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    writeLump(16, vis, sizeof(vis));
+    return bytes;
+}
+
+bool VerifyAutoSpriteCrossBounds(const EditorScene &scene)
+{
+    size_t spriteClusters = 0;
+    size_t wireClusters = 0;
+    bool spriteOk = true;
+    bool wireOk = true;
+    for (const EditorAliasInstance &inst : scene.aliasInstances)
+    {
+        if (inst.textureName == "textures/test/multi_sprite")
+        {
+            spriteClusters++;
+            spriteOk &= inst.hasBounds && (inst.boundsMax[1] - inst.boundsMin[1] > 40.0f) &&
+                        (inst.boundsMax[0] - inst.boundsMin[0] < 60.0f);
+        }
+        else if (inst.textureName == "textures/test/horiz_wire")
+        {
+            wireClusters++;
+            wireOk &= inst.hasBounds && (inst.boundsMax[2] - inst.boundsMin[2] > 18.0f) &&
+                      (inst.boundsMax[0] - inst.boundsMin[0] <= 80.1f);
+        }
+    }
+    return Check(spriteClusters == 2u && spriteOk,
+                 "multi-quad autoSprite must cluster cleanly with per-quad 3D cross") &&
+           Check(wireClusters == 1u && wireOk,
+                 "horizontal autoSprite2 strip must rotate around major axis for Z height");
+}
+
+bool TestMultiQuadAutoSpriteAndHorizontalAutoSprite2(const std::filesystem::path &tempDir)
+{
+    const std::string shaderScript = R"(
+textures/test/multi_sprite
+{
+    deformVertexes autoSprite
+    surfaceparm trans
+    { map textures/test/f1.tga blendFunc add }
+}
+textures/test/horiz_wire
+{
+    deformVertexes autoSprite2
+    surfaceparm trans
+    { map textures/test/f1.tga blendFunc blend }
+}
+)";
+    const std::filesystem::path pk3Path = tempDir / "autosprite_bounds.pk3";
+    const std::vector<StoredZipInput> files = {
+        { "scripts/autosprite_bounds.shader", StringToBytes(shaderScript) },
+        { "textures/test/f1.tga", MakeSolidOrCutoutTga(4, 4, 255, 220, 180, 255, 0) },
+        { "maps/autosprite_bounds.bsp", BuildAutoSpriteCrossBoundsTestBsp() },
+    };
+    EditorAssetSource assets;
+    std::vector<uint8_t> bspBytes;
+    EditorScene scene;
+    std::string err;
+    if (!Check(WriteStoredZip(pk3Path, files) && assets.AddZip(pk3Path.string()) &&
+                   assets.ReadFile("maps/autosprite_bounds.bsp", bspBytes) &&
+                   LoadQ3BspSceneMemory(bspBytes, "maps/autosprite_bounds.bsp", scene, err,
+                                        EditorSceneLoadOptions{ &assets, false }),
+               err.c_str()))
+    {
+        return false;
+    }
+    return VerifyAutoSpriteCrossBounds(scene);
+}
+
+void WriteDummyFile(const std::filesystem::path &path, bool makeExecutable)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out << "x";
+    if (!makeExecutable)
+    {
+        return;
+    }
+#if !defined(_WIN32)
+    std::error_code ec;
+    std::filesystem::permissions(
+        path,
+        std::filesystem::perms::owner_exec | std::filesystem::perms::owner_read |
+            std::filesystem::perms::owner_write,
+        std::filesystem::perm_options::replace, ec);
+#endif
+}
+
+bool HasQ3SetArg(const std::vector<std::string> &args, const std::string &k, const std::string &v)
+{
+    for (size_t i = 0; i + 2 < args.size(); ++i)
+    {
+        if (args[i] == "+set" && args[i + 1] == k && args[i + 2] == v)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TestQ3BuildPlayLevelCommand(const std::filesystem::path &tempDir)
+{
+    const std::filesystem::path root = tempDir / "play_level";
+    const std::filesystem::path editorDir = root / "build" / "qray_sdk" / "editor";
+    const std::filesystem::path releaseDir = root / "build" / "Release";
+    const std::filesystem::path baseDir = root / "Quake3" / "baseq3";
+    const std::filesystem::path cpmaDir = root / "Quake3" / "cpma";
+    const std::filesystem::path shaderDir = editorDir / "shaders";
+    const std::filesystem::path blueNoise = editorDir / "textures" / "BlueNoise_LDR_RGBA_128.png";
+    const std::filesystem::path waterNormal = editorDir / "textures" / "WaterNormal_n.png";
+    const std::filesystem::path baseMat = baseDir / "qray.materials.yaml";
+    const std::filesystem::path baseLights = baseDir / "qray.lights.yaml";
+    const std::filesystem::path baseCfg = baseDir / "config.cfg";
+    const std::filesystem::path explicitMat = root / "explicit" / "custom.materials.yaml";
+    const std::filesystem::path explicitLights = root / "explicit" / "custom.lights.yaml";
+    const std::filesystem::path explicitCfg = root / "explicit" / "custom.cfg";
+
+    std::error_code ec;
+    std::filesystem::create_directories(shaderDir, ec);
+    std::filesystem::create_directories(blueNoise.parent_path(), ec);
+    std::filesystem::create_directories(releaseDir, ec);
+    std::filesystem::create_directories(baseDir, ec);
+    std::filesystem::create_directories(cpmaDir, ec);
+    std::filesystem::create_directories(explicitMat.parent_path(), ec);
+
+#if defined(_WIN32)
+    const std::filesystem::path exePath = releaseDir / "ioquake3.exe";
+    const std::filesystem::path rendererPath = releaseDir / "renderer_qray.dll";
+    const std::filesystem::path overrideExe = root / "custom_ioq3.exe";
+#else
+    const std::filesystem::path exePath = releaseDir / "ioquake3";
+    const std::filesystem::path rendererPath = releaseDir / "renderer_qray.so";
+    const std::filesystem::path overrideExe = root / "custom_ioq3";
+#endif
+    WriteDummyFile(exePath, true);
+    WriteDummyFile(overrideExe, true);
+    WriteDummyFile(rendererPath, false);
+    WriteDummyFile(blueNoise, false);
+    WriteDummyFile(waterNormal, false);
+    WriteDummyFile(baseMat, false);
+    WriteDummyFile(baseLights, false);
+    WriteDummyFile(baseCfg, false);
+    WriteDummyFile(explicitMat, false);
+    WriteDummyFile(explicitLights, false);
+    WriteDummyFile(explicitCfg, false);
+
+    const EditorFormatAdapter *adapter = GetEditorFormatAdapter();
+    if (!Check(adapter != nullptr && adapter->buildPlayLevelCommand != nullptr,
+               "Q3 adapter must register buildPlayLevelCommand"))
+    {
+        return false;
+    }
+
+    EditorPlayLevelRequest req;
+    req.executableDir = editorDir.string();
+    req.gameDir = baseDir.string();
+    req.scenePath = (baseDir / "maps" / "q3tourney1.bsp").string();
+    req.levelName = "q3tourney1";
+    req.shaderFolder = shaderDir.string();
+    req.blueNoisePath = blueNoise.string();
+    req.waterNormalPath = waterNormal.string();
+
+    EditorLaunchCommand cmd;
+    std::string err;
+    if (!Check(adapter->buildPlayLevelCommand(req, cmd, err), err.c_str()))
+    {
+        return false;
+    }
+    const std::string expectedBase = (root / "Quake3").lexically_normal().string();
+    const std::string expectedShaderDir = shaderDir.lexically_normal().string() + "/";
+    const bool hasFsGame =
+        std::find(cmd.arguments.begin(), cmd.arguments.end(), "fs_game") != cmd.arguments.end();
+    const bool baseMatches =
+        cmd.executable == exePath.lexically_normal().string() &&
+        cmd.workingDirectory == releaseDir.lexically_normal().string() &&
+        HasQ3SetArg(cmd.arguments, "cl_renderer", "qray") &&
+        HasQ3SetArg(cmd.arguments, "sv_pure", "0") &&
+        HasQ3SetArg(cmd.arguments, "fs_basepath", expectedBase) &&
+        !hasFsGame &&
+        HasQ3SetArg(cmd.arguments, "qray_shaderDir", expectedShaderDir) &&
+        HasQ3SetArg(cmd.arguments, "qray_blueNoise", blueNoise.lexically_normal().string()) &&
+        HasQ3SetArg(cmd.arguments, "qray_waterNormal", waterNormal.lexically_normal().string()) &&
+        HasQ3SetArg(cmd.arguments, "qray_authored", "1") &&
+        HasQ3SetArg(cmd.arguments, "qray_materialsPath", baseMat.lexically_normal().string()) &&
+        HasQ3SetArg(cmd.arguments, "qray_lightsPath", baseLights.lexically_normal().string()) &&
+        HasQ3SetArg(cmd.arguments, "qray_editorConfigPath", baseCfg.lexically_normal().string()) &&
+        cmd.arguments.size() >= 2u &&
+        cmd.arguments[cmd.arguments.size() - 2u] == "+devmap" &&
+        cmd.arguments.back() == "q3tourney1";
+    if (!Check(baseMatches, "Q3 baseq3 play level command mismatch"))
+    {
+        return false;
+    }
+
+    req.gameDir = cpmaDir.string() + "/";
+    req.gameExecutable = overrideExe.string();
+    req.materialsPath = explicitMat.string();
+    req.lightsPath = explicitLights.string();
+    req.configPath = explicitCfg.string();
+    EditorLaunchCommand modCmd;
+    if (!Check(adapter->buildPlayLevelCommand(req, modCmd, err), err.c_str()))
+    {
+        return false;
+    }
+    return Check(
+        modCmd.executable == overrideExe.lexically_normal().string() &&
+            HasQ3SetArg(modCmd.arguments, "fs_basepath", expectedBase) &&
+            HasQ3SetArg(modCmd.arguments, "fs_game", "cpma") &&
+            HasQ3SetArg(modCmd.arguments, "qray_authored", "1") &&
+            HasQ3SetArg(modCmd.arguments, "qray_materialsPath",
+                         explicitMat.lexically_normal().string()) &&
+            HasQ3SetArg(modCmd.arguments, "qray_lightsPath",
+                         explicitLights.lexically_normal().string()) &&
+            HasQ3SetArg(modCmd.arguments, "qray_editorConfigPath",
+                         explicitCfg.lexically_normal().string()),
+        "Q3 mod + explicit executable play level command mismatch");
+}
+
+bool TestSingleStageSurfaceLightDefaultEmissive()
+{
+    const std::string shaderScript = R"(
+models/mapobjects/spotlamp/spotlamp_l
+{
+    cull disable
+    q3map_surfacelight 200
+    {
+        map models/mapobjects/spotlamp/spotlamp_l.tga
+        rgbGen identity
+    }
+}
+textures/test/single_light_alias
+{
+    q3map_surfacelight 400
+    {
+        map textures/test/single_glow.tga
+    }
+}
+textures/test/implicit_surfacelight
+{
+    q3map_surfacelight 300
+    {
+        map $whiteimage
+    }
+}
+)";
+    EditorAssetSource assets;
+    Q3ShaderDatabase db;
+    db.ParseScript(shaderScript.data(), shaderScript.size(), true, &assets);
+
+    auto applyToTex = [&](const char *shaderName, EditorTexture &outTex) {
+        const Q3ShaderDef *def = db.Find(shaderName);
+        if (!Check(def != nullptr, "single-stage surfacelight shader missing"))
+        {
+            return false;
+        }
+        outTex = {};
+        outTex.name = shaderName;
+        outTex.width = 8;
+        outTex.height = 8;
+        outTex.rgba.assign(8u * 8u * 4u, 255u);
+        ApplyQ3ShaderToEditorTexture(*def, &assets, false, outTex);
+        return Check(outTex.isEmissiveShader && !outTex.fullbright.empty(),
+                     "single-stage surfacelight must mark emissive shader and fullbright");
+    };
+
+    EditorTexture spotlampTex;
+    EditorTexture aliasTex;
+    EditorTexture implicitTex;
+    return applyToTex("models/mapobjects/spotlamp/spotlamp_l", spotlampTex) &&
+           Check(spotlampTex.defaultEmissiveTexture == "models/mapobjects/spotlamp/spotlamp_l",
+                 "spotlamp_l defaultEmissiveTexture must resolve to self map") &&
+           applyToTex("textures/test/single_light_alias", aliasTex) &&
+           Check(aliasTex.defaultEmissiveTexture == "textures/test/single_glow",
+                 "single-stage surfacelight defaultEmissiveTexture must resolve to stage map") &&
+           applyToTex("textures/test/implicit_surfacelight", implicitTex) &&
+           Check(implicitTex.defaultEmissiveTexture == "textures/test/implicit_surfacelight",
+                 "implicit single-stage surfacelight must fall back to tex.name");
+}
+
 int main()
 {
     if (!TestAdapterStaticRegistrarAndDotSlashCatalog())
@@ -2295,11 +2767,14 @@ int main()
     std::filesystem::create_directories(tempDir, ec);
 
     const bool ok = TestShaderAndSkinParsing() && TestShaderEdgeCases() &&
+                    TestSingleStageSurfaceLightDefaultEmissive() &&
                     TestCutoutOverlaysLightsAndMd3(tempDir) &&
                     TestRegressionShadersAndPerSurfaceOverlays(tempDir) &&
                     TestQ3SurfaceLightsBucketingAndDedup(tempDir) &&
+                    TestMultiQuadAutoSpriteAndHorizontalAutoSprite2(tempDir) &&
                     TestSyntheticQ3BspAndCharacter(tempDir) &&
                     TestOverlayCloudSkyAndSessionPaths(tempDir) &&
+                    TestQ3BuildPlayLevelCommand(tempDir) &&
                     TestRetailBaseQ3IfPresent();
 
     std::filesystem::remove_all(tempDir, ec);

@@ -35,6 +35,8 @@ constexpr int32_t kMstPatch = 2;
 constexpr int32_t kMstTriangleSoup = 3;
 
 constexpr int32_t kSurfSky = 0x4;
+constexpr int32_t kSurfNoImpact = 0x10;
+constexpr int32_t kSurfNoMarks = 0x20;
 constexpr int32_t kSurfNoDraw = 0x80;
 
 constexpr int32_t kContentsLava = 8;
@@ -913,7 +915,7 @@ void AppendTwoSidedGeometry(std::vector<QrVertex> &verts, std::vector<uint32_t> 
 }
 
 void PushTriangleFace(const std::vector<QrVertex> &verts, uint32_t i0, uint32_t i1, uint32_t i2,
-                      EditorSurface &batch)
+                      EditorSurface &batch, uint32_t aliasInstanceId = 0)
 {
     const QrVertex &v0 = verts[i0];
     const QrVertex &v1 = verts[i1];
@@ -923,6 +925,7 @@ void PushTriangleFace(const std::vector<QrVertex> &verts, uint32_t i0, uint32_t 
     TriangleCross(v0.position, v1.position, v2.position, face.normal);
     NormalizeVec3(face.normal);
     face.cluster = v0.cluster != 0u ? v0.cluster : (v1.cluster != 0u ? v1.cluster : v2.cluster);
+    face.aliasInstanceId = aliasInstanceId;
     face.positions = {
         QrFloat3D{ { v0.position[0], v0.position[1], v0.position[2] } },
         QrFloat3D{ { v1.position[0], v1.position[1], v1.position[2] } },
@@ -936,16 +939,10 @@ void PushTriangleFace(const std::vector<QrVertex> &verts, uint32_t i0, uint32_t 
     batch.faces.push_back(std::move(face));
 }
 
-bool TryBuildQuadFromTwoTris(const std::vector<QrVertex> &verts,
-                             const std::vector<uint32_t> &indices, uint32_t outQuad[4])
+bool TryBuildQuadFromTriPair(size_t vertCount, const uint32_t triPair[6], uint32_t outQuad[4])
 {
-    if (indices.size() != 6)
-    {
-        return false;
-    }
-
-    const uint32_t a[3] = { indices[0], indices[1], indices[2] };
-    const uint32_t b[3] = { indices[3], indices[4], indices[5] };
+    const uint32_t a[3] = { triPair[0], triPair[1], triPair[2] };
+    const uint32_t b[3] = { triPair[3], triPair[4], triPair[5] };
     int shared = 0;
     uint32_t fourth = UINT32_MAX;
     int fourthPos = -1;
@@ -978,14 +975,20 @@ bool TryBuildQuadFromTwoTris(const std::vector<QrVertex> &verts,
             outQuad[1] = fourth;
             outQuad[2] = a[(ia + 1) % 3];
             outQuad[3] = a[(ia + 2) % 3];
-            return *std::max_element(outQuad, outQuad + 4) < verts.size();
+            return *std::max_element(outQuad, outQuad + 4) < vertCount;
         }
     }
     return false;
 }
 
+bool TryBuildQuadFromTwoTris(const std::vector<QrVertex> &verts,
+                             const std::vector<uint32_t> &indices, uint32_t outQuad[4])
+{
+    return indices.size() == 6 && TryBuildQuadFromTriPair(verts.size(), indices.data(), outQuad);
+}
+
 void AppendCoarsePatchFaces(const std::vector<QrVertex> &verts, int cols, int rows,
-                            EditorSurface &batch)
+                            EditorSurface &batch, uint32_t aliasInstanceId = 0)
 {
     for (int y = 0; y + 1 < rows; y += kPatchFaceStride)
     {
@@ -1014,6 +1017,7 @@ void AppendCoarsePatchFaces(const std::vector<QrVertex> &verts, int cols, int ro
                 face.normal[2] = -face.normal[2];
             }
             face.cluster = verts[v00].cluster != 0u ? verts[v00].cluster : verts[v11].cluster;
+            face.aliasInstanceId = aliasInstanceId;
             const uint32_t quadVerts[4] = {
                 v00,
                 flipQuad ? v10 : v01,
@@ -1035,11 +1039,12 @@ void AppendCoarsePatchFaces(const std::vector<QrVertex> &verts, int cols, int ro
 
 void AppendRepresentativeFaces(int32_t surfaceType, int patchCols, int patchRows,
                                const std::vector<QrVertex> &frontVerts,
-                               const std::vector<uint32_t> &frontIndices, EditorSurface &batch)
+                               const std::vector<uint32_t> &frontIndices, EditorSurface &batch,
+                               uint32_t aliasInstanceId = 0)
 {
     if (surfaceType == kMstPatch && patchCols > 1 && patchRows > 1)
     {
-        AppendCoarsePatchFaces(frontVerts, patchCols, patchRows, batch);
+        AppendCoarsePatchFaces(frontVerts, patchCols, patchRows, batch, aliasInstanceId);
         return;
     }
 
@@ -1052,6 +1057,7 @@ void AppendRepresentativeFaces(int32_t surfaceType, int patchCols, int patchRows
         NormalizeVec3(face.normal);
         face.cluster = frontVerts[quad[0]].cluster != 0u ? frontVerts[quad[0]].cluster
                                                          : frontVerts[quad[1]].cluster;
+        face.aliasInstanceId = aliasInstanceId;
         for (uint32_t idx : quad)
         {
             face.positions.push_back(QrFloat3D{ { frontVerts[idx].position[0],
@@ -1067,8 +1073,211 @@ void AppendRepresentativeFaces(int32_t surfaceType, int patchCols, int patchRows
     for (size_t i = 0; i + 2 < frontIndices.size(); i += 3)
     {
         PushTriangleFace(frontVerts, frontIndices[i], frontIndices[i + 1], frontIndices[i + 2],
-                         batch);
+                         batch, aliasInstanceId);
     }
+}
+
+float EdgeDistSq(const float a[3], const float b[3])
+{
+    const float dx = b[0] - a[0];
+    const float dy = b[1] - a[1];
+    const float dz = b[2] - a[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+void ComputeAutoSprite2MajorAxis(const std::vector<QrVertex> &verts, const uint32_t quad[4],
+                                 float outAxis[3])
+{
+    const float *p0 = verts[quad[0]].position;
+    const float *p1 = verts[quad[1]].position;
+    const float *p2 = verts[quad[2]].position;
+    const float *p3 = verts[quad[3]].position;
+    const float sum01 = EdgeDistSq(p0, p1) + EdgeDistSq(p3, p2);
+    const float sum12 = EdgeDistSq(p1, p2) + EdgeDistSq(p0, p3);
+    const float *e0a = (sum01 <= sum12) ? p0 : p1;
+    const float *e0b = (sum01 <= sum12) ? p1 : p2;
+    const float *e1a = (sum01 <= sum12) ? p3 : p0;
+    const float *e1b = (sum01 <= sum12) ? p2 : p3;
+    for (int axis = 0; axis < 3; axis++)
+    {
+        outAxis[axis] = 0.5f * (e1a[axis] + e1b[axis]) - 0.5f * (e0a[axis] + e0b[axis]);
+    }
+    NormalizeVec3(outAxis);
+    if (outAxis[0] * outAxis[0] + outAxis[1] * outAxis[1] + outAxis[2] * outAxis[2] < 1e-6f)
+    {
+        outAxis[0] = 0.0f;
+        outAxis[1] = 0.0f;
+        outAxis[2] = 1.0f;
+    }
+}
+
+void ChooseAutoSpriteRotationAxis(const std::vector<QrVertex> &verts, const uint32_t quad[4],
+                                  bool autoSprite2, float outAxis[3])
+{
+    if (autoSprite2)
+    {
+        ComputeAutoSprite2MajorAxis(verts, quad, outAxis);
+        return;
+    }
+
+    float minP[3] = {};
+    float maxP[3] = {};
+    std::copy_n(verts[quad[0]].position, 3, minP);
+    std::copy_n(verts[quad[0]].position, 3, maxP);
+    for (int k = 1; k < 4; k++)
+    {
+        for (int axis = 0; axis < 3; axis++)
+        {
+            minP[axis] = std::min(minP[axis], verts[quad[k]].position[axis]);
+            maxP[axis] = std::max(maxP[axis], verts[quad[k]].position[axis]);
+        }
+    }
+    const bool flatInZ =
+        (maxP[2] - minP[2] < 1.0f) && (maxP[0] - minP[0] > 1.0f || maxP[1] - minP[1] > 1.0f);
+    outAxis[0] = flatInZ ? 1.0f : 0.0f;
+    outAxis[1] = 0.0f;
+    outAxis[2] = flatInZ ? 0.0f : 1.0f;
+}
+
+void RotatePoint90AroundAxis(const float p[3], const float center[3], const float axis[3],
+                             float out[3])
+{
+    const float rel[3] = { p[0] - center[0], p[1] - center[1], p[2] - center[2] };
+    const float proj = rel[0] * axis[0] + rel[1] * axis[1] + rel[2] * axis[2];
+    const float perp[3] = {
+        rel[0] - proj * axis[0],
+        rel[1] - proj * axis[1],
+        rel[2] - proj * axis[2],
+    };
+    const float cr[3] = {
+        axis[1] * perp[2] - axis[2] * perp[1],
+        axis[2] * perp[0] - axis[0] * perp[2],
+        axis[0] * perp[1] - axis[1] * perp[0],
+    };
+    for (int c = 0; c < 3; c++)
+    {
+        out[c] = center[c] + proj * axis[c] + cr[c];
+    }
+}
+
+uint32_t FirstNonZeroQuadCluster(const std::vector<QrVertex> &verts, const uint32_t quad[4])
+{
+    for (int k = 0; k < 4; k++)
+    {
+        if (verts[quad[k]].cluster != 0u)
+        {
+            return verts[quad[k]].cluster;
+        }
+    }
+    return 0u;
+}
+
+void AppendRotatedAutoSpriteQuad(const std::vector<QrVertex> &verts, const uint32_t quad[4],
+                                 bool autoSprite2, EditorSurface &batch, uint32_t aliasInstanceId)
+{
+    float center[3] = {};
+    for (int k = 0; k < 4; k++)
+    {
+        for (int axis = 0; axis < 3; axis++)
+        {
+            center[axis] += verts[quad[k]].position[axis] * 0.25f;
+        }
+    }
+    float rotAxis[3] = {};
+    ChooseAutoSpriteRotationAxis(verts, quad, autoSprite2, rotAxis);
+
+    EditorSurfaceFace crossed;
+    crossed.aliasInstanceId = aliasInstanceId;
+    crossed.cluster = FirstNonZeroQuadCluster(verts, quad);
+    for (int k = 0; k < 4; k++)
+    {
+        const QrVertex &v = verts[quad[k]];
+        float rotated[3] = {};
+        RotatePoint90AroundAxis(v.position, center, rotAxis, rotated);
+        crossed.positions.push_back(QrFloat3D{ { rotated[0], rotated[1], rotated[2] } });
+        crossed.texCoords.push_back(QrFloat2D{ { v.texCoord[0], v.texCoord[1] } });
+    }
+    TriangleCross(crossed.positions[0].data, crossed.positions[1].data,
+                  crossed.positions[2].data, crossed.normal);
+    NormalizeVec3(crossed.normal);
+    batch.faces.push_back(std::move(crossed));
+}
+
+void AppendRotatedAutoSpriteTris(const std::vector<QrVertex> &verts,
+                                 const std::vector<uint32_t> &indices, EditorSurface &batch,
+                                 uint32_t aliasInstanceId)
+{
+    float center[3] = {};
+    const float inv = 1.0f / float(verts.size());
+    for (const QrVertex &v : verts)
+    {
+        for (int axis = 0; axis < 3; axis++)
+        {
+            center[axis] += v.position[axis] * inv;
+        }
+    }
+    for (size_t i = 0; i + 2 < indices.size(); i += 3)
+    {
+        EditorSurfaceFace triFace;
+        triFace.aliasInstanceId = aliasInstanceId;
+        const uint32_t c0 = verts[indices[i]].cluster;
+        const uint32_t c1 = verts[indices[i + 1]].cluster;
+        triFace.cluster = c0 != 0u ? c0 : (c1 != 0u ? c1 : verts[indices[i + 2]].cluster);
+        for (size_t k = 0; k < 3; k++)
+        {
+            const QrVertex &v = verts[indices[i + k]];
+            const float dx = v.position[0] - center[0];
+            const float dy = v.position[1] - center[1];
+            triFace.positions.push_back(QrFloat3D{ {
+                center[0] - dy,
+                center[1] + dx,
+                v.position[2],
+            } });
+            triFace.texCoords.push_back(QrFloat2D{ { v.texCoord[0], v.texCoord[1] } });
+        }
+        TriangleCross(triFace.positions[0].data, triFace.positions[1].data,
+                      triFace.positions[2].data, triFace.normal);
+        NormalizeVec3(triFace.normal);
+        batch.faces.push_back(std::move(triFace));
+    }
+}
+
+void AppendCrossedAutoSpritePickingFace(const std::vector<QrVertex> &verts,
+                                        const std::vector<uint32_t> &indices, bool autoSprite2,
+                                        EditorSurface &batch, uint32_t aliasInstanceId)
+{
+    if (verts.size() < 3 || indices.size() < 3)
+    {
+        return;
+    }
+
+    if (indices.size() >= 6u && (indices.size() % 6u) == 0u)
+    {
+        std::vector<std::array<uint32_t, 4>> quads;
+        quads.reserve(indices.size() / 6u);
+        bool allQuads = true;
+        for (size_t i = 0; i < indices.size(); i += 6u)
+        {
+            std::array<uint32_t, 4> quad{};
+            if (!TryBuildQuadFromTriPair(verts.size(), &indices[i], quad.data()))
+            {
+                allQuads = false;
+                break;
+            }
+            quads.push_back(quad);
+        }
+        if (allQuads)
+        {
+            for (const auto &quad : quads)
+            {
+                AppendRotatedAutoSpriteQuad(verts, quad.data(), autoSprite2, batch,
+                                            aliasInstanceId);
+            }
+            return;
+        }
+    }
+
+    AppendRotatedAutoSpriteTris(verts, indices, batch, aliasInstanceId);
 }
 
 void AssignVertexClustersAndBounds(std::vector<QrVertex> &verts, EditorScene &scene,
@@ -1498,6 +1707,61 @@ void ParseAllQ3Entities(const Q3BspDataView &view, EditorScene &scene,
     }
 }
 
+void TryAppendExtraSceneTexture(const std::string &rawRef, const EditorAssetSource *assets,
+                                std::unordered_set<std::string> &knownTextures, EditorScene &scene)
+{
+    const std::string cleanRef = StripQ3ImageExtension(NormalizeQ3AssetPath(rawRef));
+    if (cleanRef.empty() || !knownTextures.insert(cleanRef).second)
+    {
+        return;
+    }
+
+    EditorTexture extra;
+    extra.name = cleanRef;
+    extra.isExternal = true;
+    std::string resolved;
+    if (LoadQ3ImageRgba(assets, rawRef, extra.rgba, extra.width, extra.height, resolved) &&
+        extra.width > 0 && extra.height > 0)
+    {
+        scene.textures.push_back(std::move(extra));
+    }
+}
+
+void RegisterShaderStageTextures(const EditorTexture &tex, const EditorAssetSource *assets,
+                                 std::unordered_set<std::string> &knownTextures, EditorScene &scene)
+{
+    TryAppendExtraSceneTexture(tex.defaultBaseTexture, assets, knownTextures, scene);
+    TryAppendExtraSceneTexture(tex.defaultEmissiveTexture, assets, knownTextures, scene);
+    TryAppendExtraSceneTexture(tex.defaultOverlayTexture, assets, knownTextures, scene);
+
+    for (const EditorOverlayStage &stage : tex.shaderStages)
+    {
+        if (!stage.isLightmap && !stage.isWhite && !stage.map.empty())
+        {
+            TryAppendExtraSceneTexture(stage.map, assets, knownTextures, scene);
+        }
+        for (const std::string &frameMap : stage.animationMaps)
+        {
+            TryAppendExtraSceneTexture(frameMap, assets, knownTextures, scene);
+        }
+    }
+}
+
+void AppendDefaultEmissiveTextures(int shaderCount, const EditorAssetSource *assets, EditorScene &scene)
+{
+    std::unordered_set<std::string> knownTextures;
+    knownTextures.reserve(scene.textures.size() * 2u);
+    for (const EditorTexture &tex : scene.textures)
+    {
+        knownTextures.insert(StripQ3ImageExtension(NormalizeQ3AssetPath(tex.name)));
+    }
+
+    for (int i = 0; i < shaderCount; i++)
+    {
+        RegisterShaderStageTextures(scene.textures[size_t(i)], assets, knownTextures, scene);
+    }
+}
+
 void BuildQ3TexturesAndSky(const Q3BspDataView &view, const Q3ShaderDatabase &shaders,
                            const EditorAssetSource *assets, EditorScene &scene,
                            std::vector<const Q3ShaderDef *> &shaderDefs)
@@ -1534,6 +1798,8 @@ void BuildQ3TexturesAndSky(const Q3BspDataView &view, const Q3ShaderDatabase &sh
             }
         }
     }
+
+    AppendDefaultEmissiveTextures(view.shaderCount, assets, scene);
 }
 
 void SkyAxisDirection(int axis, float s, float t, float outDir[3])
@@ -1708,6 +1974,7 @@ struct Q3SurfaceCollectContext
     EditorScene &scene;
     Q3BspClusterState &clusterState;
     const Q3ShaderDef *firstSkyDef = nullptr;
+    uint32_t nextPatchOverlayGroup = 2u;
 };
 
 bool BuildSurfaceMeshData(const Q3DSurface &surf, const Q3BspDataView &view,
@@ -2151,9 +2418,20 @@ void AppendQ3SurfaceToBatch(const Q3DSurface &surf, const Q3DShader &dshader,
         batch.kind = ClassifyQ3SurfaceKind(dshader, def);
         batch.hasAuthoredNormals = true;
         batch.isCutoutUnderlay = def != nullptr && def->cutoutFrameUnderlay;
+        batch.noMarks = ((dshader.surfaceFlags & (kSurfNoImpact | kSurfNoMarks)) != 0) ||
+                        ((dshader.contentFlags & kContentsFog) != 0);
     }
+    else if ((dshader.surfaceFlags & (kSurfNoImpact | kSurfNoMarks)) != 0 ||
+             (dshader.contentFlags & kContentsFog) != 0)
+    {
+        batch.noMarks = true;
+    }
+    batch.isOverlayOnly = false;
 
-    AppendRepresentativeFaces(surf.surfaceType, patchDims[0], patchDims[1], verts, indices, batch);
+    const bool isModelMesh =
+        (surf.surfaceType == kMstTriangleSoup) || (batch.textureName.rfind("models/", 0) == 0);
+    AppendRepresentativeFaces(surf.surfaceType, patchDims[0], patchDims[1], verts, indices, batch,
+                              isModelMesh ? 1u : 0u);
     std::vector<uint32_t> appendedIndices = indices;
     if (def != nullptr && def->twoSided)
     {
@@ -2169,19 +2447,47 @@ void AppendQ3SurfaceToBatch(const Q3DSurface &surf, const Q3DShader &dshader,
     }
 }
 
-void EmitNonTracedOverlaySurface(const Q3DSurface &surf, const Q3ShaderDef &def,
+void EmitNonTracedOverlaySurface(const Q3DSurface &surf, const Q3DShader &dshader,
+                                 const Q3ShaderDef &def, const int patchDims[2],
                                  std::vector<QrVertex> &verts,
                                  const std::vector<uint32_t> &indices, Q3SurfaceCollectContext &ctx)
 {
     const EditorTexture &tex = ctx.scene.textures[size_t(surf.shaderNum)];
     EmitQ3SurfacePointLights(surf, def, tex, verts, indices, ctx.scene);
     AssignVertexClustersAndBounds(verts, ctx.scene, ctx.clusterState, false);
+
     EditorOverlaySurface individualOverlay;
     AppendQ3OverlayMesh(verts, indices, def, tex.name,
                         { false, 0u, def.stages.size(), 0.0f }, individualOverlay);
     if (!individualOverlay.vertices.empty() && !individualOverlay.indices.empty())
     {
         ctx.scene.overlaySurfaces.push_back(std::move(individualOverlay));
+    }
+
+    EditorSurface &batch = ctx.batches[size_t(surf.shaderNum)];
+    if (batch.texture < 0)
+    {
+        batch.texture = surf.shaderNum;
+        batch.textureName = tex.name;
+        batch.kind = ClassifyQ3SurfaceKind(dshader, &def);
+        batch.hasAuthoredNormals = true;
+        batch.isOverlayOnly = true;
+    }
+    const uint32_t overlayGroupTag =
+        (surf.surfaceType == kMstPatch) ? ctx.nextPatchOverlayGroup++ : 1u;
+    AppendRepresentativeFaces(surf.surfaceType, patchDims[0], patchDims[1], verts, indices, batch,
+                              overlayGroupTag);
+    if (def.autoSprite || def.autoSprite2)
+    {
+        AppendCrossedAutoSpritePickingFace(verts, indices, def.autoSprite2, batch,
+                                           overlayGroupTag);
+    }
+    const uint32_t baseVertex = uint32_t(batch.vertices.size());
+    batch.vertices.insert(batch.vertices.end(), verts.begin(), verts.end());
+    batch.indices.reserve(batch.indices.size() + indices.size());
+    for (uint32_t idx : indices)
+    {
+        batch.indices.push_back(baseVertex + idx);
     }
 }
 
@@ -2234,6 +2540,26 @@ void ApplyBaseScaleAndAppendSurface(const Q3DSurface &surf, const Q3DShader &dsh
     AppendQ3SurfaceToBatch(surf, dshader, def, patchDims, verts, indices, ctx);
 }
 
+void EmitTracedQ3Surface(const Q3DSurface &surf, const Q3DShader &dshader, const Q3ShaderDef *def,
+                         const int patchDims[2], bool isSky, std::vector<QrVertex> &verts,
+                         std::vector<uint32_t> &indices, Q3SurfaceCollectContext &ctx)
+{
+    if (def != nullptr && !isSky)
+    {
+        EmitQ3SurfacePointLights(surf, *def, ctx.scene.textures[size_t(surf.shaderNum)], verts,
+                                 indices, ctx.scene);
+    }
+
+    const bool wantOverlay = def != nullptr && def->usesOverlay && !isSky;
+    std::vector<QrVertex> overlayVerts = wantOverlay ? verts : std::vector<QrVertex>{};
+    ApplyBaseScaleAndAppendSurface(surf, dshader, def, patchDims, isSky, verts, indices, ctx);
+
+    if (wantOverlay && !overlayVerts.empty())
+    {
+        AppendStandardQ3OverlayBatches(surf, *def, overlayVerts, indices, ctx);
+    }
+}
+
 void EmitSingleQ3Surface(const Q3DSurface &surf, Q3SurfaceCollectContext &ctx)
 {
     const Q3DShader &dshader = ctx.view.shaders[surf.shaderNum];
@@ -2260,24 +2586,11 @@ void EmitSingleQ3Surface(const Q3DSurface &surf, Q3SurfaceCollectContext &ctx)
 
     if (def != nullptr && def->isNonTracedOverlay && !isSky)
     {
-        EmitNonTracedOverlaySurface(surf, *def, verts, indices, ctx);
+        EmitNonTracedOverlaySurface(surf, dshader, *def, patchDims, verts, indices, ctx);
         return;
     }
 
-    if (def != nullptr && !isSky)
-    {
-        EmitQ3SurfacePointLights(surf, *def, ctx.scene.textures[size_t(surf.shaderNum)], verts,
-                                 indices, ctx.scene);
-    }
-
-    const bool wantOverlay = def != nullptr && def->usesOverlay && !isSky;
-    std::vector<QrVertex> overlayVerts = wantOverlay ? verts : std::vector<QrVertex>{};
-    ApplyBaseScaleAndAppendSurface(surf, dshader, def, patchDims, isSky, verts, indices, ctx);
-
-    if (wantOverlay && !overlayVerts.empty())
-    {
-        AppendStandardQ3OverlayBatches(surf, *def, overlayVerts, indices, ctx);
-    }
+    EmitTracedQ3Surface(surf, dshader, def, patchDims, isSky, verts, indices, ctx);
 }
 
 void CollectQ3SurfaceRange(int firstSurface, int numSurfaces, Q3SurfaceCollectContext &ctx)
@@ -2293,6 +2606,181 @@ void CollectQ3SurfaceRange(int firstSurface, int numSurfaces, Q3SurfaceCollectCo
     }
 }
 
+struct FaceAabb
+{
+    float mn[3] = {};
+    float mx[3] = {};
+};
+
+FaceAabb ComputeFaceAabb(const EditorSurfaceFace &face)
+{
+    FaceAabb box;
+    std::copy_n(face.positions[0].data, 3, box.mn);
+    std::copy_n(face.positions[0].data, 3, box.mx);
+    for (size_t i = 1; i < face.positions.size(); i++)
+    {
+        for (int axis = 0; axis < 3; axis++)
+        {
+            box.mn[axis] = std::min(box.mn[axis], face.positions[i].data[axis]);
+            box.mx[axis] = std::max(box.mx[axis], face.positions[i].data[axis]);
+        }
+    }
+    return box;
+}
+
+bool BoxesOverlapWithin(const FaceAabb &a, const FaceAabb &b, float pad)
+{
+    for (int axis = 0; axis < 3; axis++)
+    {
+        if (a.mn[axis] > b.mx[axis] + pad || b.mn[axis] > a.mx[axis] + pad)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+size_t FindClusterRoot(std::vector<size_t> &parent, size_t x)
+{
+    while (parent[x] != x)
+    {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    return x;
+}
+
+void BuildFaceClustersUnionFind(const std::vector<FaceAabb> &boxes,
+                                const std::vector<uint32_t> &groupTags, float expand,
+                                std::vector<size_t> &parent)
+{
+    const size_t n = boxes.size();
+    parent.resize(n);
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; i++)
+    {
+        parent[i] = i;
+        order[i] = i;
+    }
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return boxes[a].mn[0] < boxes[b].mn[0]; });
+
+    for (size_t a = 0; a < n; a++)
+    {
+        const size_t ia = order[a];
+        const float limitX = boxes[ia].mx[0] + expand;
+        for (size_t b = a + 1; b < n; b++)
+        {
+            const size_t ib = order[b];
+            if (boxes[ib].mn[0] > limitX)
+            {
+                break;
+            }
+            const size_t ra = FindClusterRoot(parent, ia);
+            const size_t rb = FindClusterRoot(parent, ib);
+            if (ra != rb && groupTags[ia] == groupTags[ib] &&
+                BoxesOverlapWithin(boxes[ia], boxes[ib], expand))
+            {
+                parent[rb] = ra;
+            }
+        }
+    }
+}
+
+void EmitClusteredAliasInstance(EditorSurface &batch, const std::vector<size_t> &clusteredFaces,
+                                const std::vector<size_t> &members, const std::vector<FaceAabb> &boxes,
+                                EditorScene &scene)
+{
+    FaceAabb box = boxes[members[0]];
+    for (size_t k = 1; k < members.size(); k++)
+    {
+        const FaceAabb &mb = boxes[members[k]];
+        for (int axis = 0; axis < 3; axis++)
+        {
+            box.mn[axis] = std::min(box.mn[axis], mb.mn[axis]);
+            box.mx[axis] = std::max(box.mx[axis], mb.mx[axis]);
+        }
+    }
+
+    float origin[3] = {};
+    float diagSq = 0.0f;
+    for (int axis = 0; axis < 3; axis++)
+    {
+        const float mid = 0.5f * (box.mn[axis] + box.mx[axis]);
+        if (box.mx[axis] - box.mn[axis] < 4.0f)
+        {
+            box.mn[axis] = mid - 2.0f;
+            box.mx[axis] = mid + 2.0f;
+        }
+        origin[axis] = mid;
+        const float span = box.mx[axis] - box.mn[axis];
+        diagSq += span * span;
+    }
+
+    const uint32_t instanceId = uint32_t(scene.aliasInstances.size()) + 1u;
+    for (size_t m : members)
+    {
+        batch.faces[clusteredFaces[m]].aliasInstanceId = instanceId;
+    }
+
+    EditorAliasInstance inst;
+    inst.modelName = batch.textureName;
+    inst.textureName = batch.textureName;
+    std::copy_n(origin, 3, inst.origin);
+    inst.modelSizeMeters = std::max(0.5f * std::sqrt(diagSq) / kEditorUnitsPerMeter, 0.001f);
+    inst.uniqueID = 0;
+    inst.aliasInstanceId = instanceId;
+    inst.hasBounds = true;
+    std::copy_n(box.mn, 3, inst.boundsMin);
+    std::copy_n(box.mx, 3, inst.boundsMax);
+    scene.aliasInstances.push_back(std::move(inst));
+}
+
+void ClusterBatchAliasInstances(EditorSurface &batch, EditorScene &scene)
+{
+    std::vector<size_t> clusteredFaces;
+    std::vector<FaceAabb> boxes;
+    std::vector<uint32_t> groupTags;
+    for (size_t i = 0; i < batch.faces.size(); i++)
+    {
+        if (batch.faces[i].aliasInstanceId != 0 && !batch.faces[i].positions.empty())
+        {
+            clusteredFaces.push_back(i);
+            boxes.push_back(ComputeFaceAabb(batch.faces[i]));
+            groupTags.push_back(batch.faces[i].aliasInstanceId);
+        }
+    }
+    if (clusteredFaces.empty())
+    {
+        return;
+    }
+
+    std::vector<size_t> parent;
+    BuildFaceClustersUnionFind(boxes, groupTags, 4.0f, parent);
+
+    std::unordered_map<size_t, size_t> groupIndexByRoot;
+    std::vector<std::vector<size_t>> groups;
+    for (size_t i = 0; i < clusteredFaces.size(); i++)
+    {
+        const size_t root = FindClusterRoot(parent, i);
+        const auto it = groupIndexByRoot.find(root);
+        if (it == groupIndexByRoot.end())
+        {
+            groupIndexByRoot.emplace(root, groups.size());
+            groups.push_back({ i });
+        }
+        else
+        {
+            groups[it->second].push_back(i);
+        }
+    }
+
+    for (const std::vector<size_t> &members : groups)
+    {
+        EmitClusteredAliasInstance(batch, clusteredFaces, members, boxes, scene);
+    }
+}
+
 void MergeCollectedQ3Surfaces(std::vector<EditorSurface> &batches,
                               std::vector<EditorOverlaySurface> &overlayBatches,
                               std::vector<EditorOverlaySurface> &postOverlayBatches,
@@ -2304,6 +2792,7 @@ void MergeCollectedQ3Surfaces(std::vector<EditorSurface> &batches,
         {
             continue;
         }
+        ClusterBatchAliasInstances(batch, scene);
         const uint32_t baseVertex = uint32_t(scene.vertices.size());
         scene.vertices.insert(scene.vertices.end(), batch.vertices.begin(), batch.vertices.end());
         scene.indices.reserve(scene.indices.size() + batch.indices.size());
@@ -2380,12 +2869,15 @@ bool LoadQ3BspSceneMemory(const std::vector<uint8_t> &bytes, const std::string &
     if (view.modelCount > 0)
     {
         CollectQ3SurfaceRange(view.models[0].firstSurface, view.models[0].numSurfaces, collectCtx);
-        for (int m = 1; m < view.modelCount; m++)
+        if (options.includeInlineSubmodels)
         {
-            if (hiddenSubmodels.find(m) == hiddenSubmodels.end())
+            for (int m = 1; m < view.modelCount; m++)
             {
-                CollectQ3SurfaceRange(view.models[m].firstSurface, view.models[m].numSurfaces,
-                                      collectCtx);
+                if (hiddenSubmodels.find(m) == hiddenSubmodels.end())
+                {
+                    CollectQ3SurfaceRange(view.models[m].firstSurface, view.models[m].numSurfaces,
+                                          collectCtx);
+                }
             }
         }
     }

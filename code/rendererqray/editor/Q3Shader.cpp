@@ -1069,22 +1069,59 @@ bool TextureHasBinaryCutoutHoles(const std::string &mapName, const EditorAssetSo
     return hasHoles;
 }
 
+std::string StagePrimaryTextureMap(const Q3ShaderStage &stage)
+{
+    if (!stage.map.empty())
+    {
+        return stage.map;
+    }
+    if (!stage.animationMaps.empty())
+    {
+        return stage.animationMaps.front();
+    }
+    return {};
+}
+
 std::string ResolveEmissionMaskMap(const Q3ShaderDef &def)
 {
-    if (def.surfaceLight <= 0.0f)
+    if (def.surfaceLight <= 0.0f && !def.tracedBase && !def.isNonTracedOverlay)
     {
         return {};
     }
 
     for (const Q3ShaderStage &stage : def.stages)
     {
-        if (stage.additive && !stage.isLightmap && !stage.isWhite && !stage.isEnvironment &&
-            !stage.map.empty() && !EqualsAsciiIgnoreCase(stage.map, def.map))
+        if (stage.additive && !stage.isLightmap && !stage.isWhite && !stage.isEnvironment)
         {
-            return stage.map;
+            const std::string stageMap = StagePrimaryTextureMap(stage);
+            if (!stageMap.empty() &&
+                (def.isNonTracedOverlay || !EqualsAsciiIgnoreCase(stageMap, def.map)))
+            {
+                return stageMap;
+            }
         }
     }
-    if (!def.lightImage.empty() && !EqualsAsciiIgnoreCase(def.lightImage, def.map))
+    if (def.cutoutFrameUnderlay && def.baseStageIndex > 0u)
+    {
+        for (size_t i = 0; i < def.baseStageIndex && i < def.stages.size(); ++i)
+        {
+            const Q3ShaderStage &stage = def.stages[i];
+            if (!stage.isLightmap && !stage.isWhite && !stage.isEnvironment)
+            {
+                const std::string stageMap = StagePrimaryTextureMap(stage);
+                if (!stageMap.empty())
+                {
+                    return stageMap;
+                }
+            }
+        }
+    }
+    if (def.compositeUnderlayBase && def.underlayEmissive && !def.underlayMap.empty())
+    {
+        return def.underlayMap;
+    }
+    if (def.surfaceLight > 0.0f && !def.lightImage.empty() &&
+        !EqualsAsciiIgnoreCase(def.lightImage, def.map))
     {
         return def.lightImage;
     }
@@ -1871,6 +1908,18 @@ void ApplySurfaceMaterialMasks(const Q3ShaderDef &def, EditorTexture &tex)
             tex.rgba[i * 4u + 3u] = 255u;
         }
     }
+    else if (def.cutoutFrameUnderlay)
+    {
+        if (def.baseStageIndex < def.stages.size() && def.stages[def.baseStageIndex].alphaBlend)
+        {
+            for (size_t i = 0; i < pixels; i++)
+            {
+                const uint8_t a = tex.rgba[i * 4u + 3u];
+                tex.rgba[i * 4u + 3u] =
+                    (a >= 245u) ? 255u : uint8_t(float(a) * (110.0f / 245.0f));
+            }
+        }
+    }
     else if (def.tracedBase && !def.alphaTested && !def.isTrans && !def.isNonTracedOverlay)
     {
         for (size_t i = 0; i < pixels; i++)
@@ -1898,6 +1947,34 @@ void AssignNormalizedSurfaceLightColor(const double sum[3], EditorTexture &tex)
     }
 }
 
+bool HasAnimatedEmissiveOverlayStage(const Q3ShaderDef &def)
+{
+    for (size_t i = 0; i < def.stages.size(); ++i)
+    {
+        if (def.tracedBase && i == def.baseStageIndex)
+        {
+            continue;
+        }
+        const Q3ShaderStage &stage = def.stages[i];
+        if (stage.isLightmap || stage.isWhite || stage.isEnvironment)
+        {
+            continue;
+        }
+        const bool isUnderlay = def.cutoutFrameUnderlay && i < def.baseStageIndex;
+        if (!stage.additive && !isUnderlay)
+        {
+            continue;
+        }
+        if (stage.animated || !stage.animationMaps.empty() ||
+            stage.rgbWave != Q3ShaderWaveType::None ||
+            stage.alphaWave != Q3ShaderWaveType::None || !stage.tcMods.empty())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool TryBakeExplicitEmissionMask(const Q3ShaderDef &def, const EditorAssetSource *assets,
                                  EditorTexture &tex)
 {
@@ -1912,6 +1989,8 @@ bool TryBakeExplicitEmissionMask(const Q3ShaderDef &def, const EditorAssetSource
         return false;
     }
 
+    const bool bakeIntoBaseAlbedo =
+        def.tracedBase && !def.cutoutFrameUnderlay && !HasAnimatedEmissiveOverlayStage(def);
     double sum[3] = { 0.0, 0.0, 0.0 };
     for (uint32_t y = 0; y < tex.height; y++)
     {
@@ -1924,7 +2003,7 @@ bool TryBakeExplicitEmissionMask(const Q3ShaderDef &def, const EditorAssetSource
                 std::max({ maskRgba[srcPx + 0], maskRgba[srcPx + 1], maskRgba[srcPx + 2] });
             const size_t dstIdx = size_t(y) * tex.width + x;
             tex.fullbright[dstIdx] = m;
-            if (def.tracedBase && !def.cutoutFrameUnderlay && m > 0u)
+            if (bakeIntoBaseAlbedo && m > 0u)
             {
                 for (int c = 0; c < 3; c++)
                 {
@@ -1943,11 +2022,165 @@ bool TryBakeExplicitEmissionMask(const Q3ShaderDef &def, const EditorAssetSource
     return true;
 }
 
+void CompositeStageBufferPixel(const Q3ShaderStage &stage, const uint8_t *srcPx, float waveScale,
+                                bool hasContributed, std::vector<float> &accumRgba, size_t dstOff)
+{
+    const float sr = float(srcPx[0]) * waveScale;
+    const float sg = float(srcPx[1]) * waveScale;
+    const float sb = float(srcPx[2]) * waveScale;
+    const float sa = float(srcPx[3]) / 255.0f;
+
+    if (stage.additive)
+    {
+        accumRgba[dstOff + 0u] = std::min(255.0f, accumRgba[dstOff + 0u] + sr);
+        accumRgba[dstOff + 1u] = std::min(255.0f, accumRgba[dstOff + 1u] + sg);
+        accumRgba[dstOff + 2u] = std::min(255.0f, accumRgba[dstOff + 2u] + sb);
+        const float peakAlpha = std::max({ sr, sg, sb });
+        accumRgba[dstOff + 3u] = std::min(255.0f, std::max(accumRgba[dstOff + 3u], peakAlpha));
+    }
+    else if (stage.alphaBlend)
+    {
+        const float cov = std::clamp(stage.invertedAlphaBlend ? (1.0f - sa) : sa, 0.0f, 1.0f);
+        accumRgba[dstOff + 0u] = cov * sr + (1.0f - cov) * accumRgba[dstOff + 0u];
+        accumRgba[dstOff + 1u] = cov * sg + (1.0f - cov) * accumRgba[dstOff + 1u];
+        accumRgba[dstOff + 2u] = cov * sb + (1.0f - cov) * accumRgba[dstOff + 2u];
+        accumRgba[dstOff + 3u] = std::min(255.0f, std::max(accumRgba[dstOff + 3u], float(srcPx[3])));
+    }
+    else if (stage.filter && hasContributed)
+    {
+        accumRgba[dstOff + 0u] = (accumRgba[dstOff + 0u] * float(srcPx[0])) / 255.0f;
+        accumRgba[dstOff + 1u] = (accumRgba[dstOff + 1u] * float(srcPx[1])) / 255.0f;
+        accumRgba[dstOff + 2u] = (accumRgba[dstOff + 2u] * float(srcPx[2])) / 255.0f;
+    }
+    else if (!stage.blended || stage.filter)
+    {
+        accumRgba[dstOff + 0u] = sr;
+        accumRgba[dstOff + 1u] = sg;
+        accumRgba[dstOff + 2u] = sb;
+        accumRgba[dstOff + 3u] = 255.0f;
+    }
+}
+
+void CompositeSingleOverlayStage(const Q3ShaderStage &stage, const EditorAssetSource *assets,
+                                 uint32_t dstW, uint32_t dstH, std::vector<float> &accumRgba,
+                                 bool &hasContributed)
+{
+    const std::string stageMap =
+        !stage.map.empty() ? stage.map
+                           : (!stage.animationMaps.empty() ? stage.animationMaps[0] : std::string{});
+    if (stage.isLightmap || stage.isWhite || stage.isEnvironment || stageMap.empty())
+    {
+        return;
+    }
+
+    std::vector<uint8_t> stageRgba;
+    uint32_t sw = 0;
+    uint32_t sh = 0;
+    std::string resolved;
+    if (!LoadQ3ImageRgba(assets, stageMap, stageRgba, sw, sh, resolved) || sw == 0 || sh == 0)
+    {
+        return;
+    }
+
+    const float waveScale =
+        stage.rgbWave == Q3ShaderWaveType::None
+            ? 1.0f
+            : std::clamp(stage.rgbWaveBase + 0.5f * std::fabs(stage.rgbWaveAmplitude), 0.35f, 1.0f);
+    const float sx = stage.scale[0] != 0.0f ? stage.scale[0] : 1.0f;
+    const float sy = stage.scale[1] != 0.0f ? stage.scale[1] : 1.0f;
+
+    for (uint32_t y = 0; y < dstH; y++)
+    {
+        const float vf = (float(y) + 0.5f) / float(dstH) * sy;
+        const uint32_t py = std::min(sh - 1u, uint32_t(std::max(0.0f, (vf - std::floor(vf)) * float(sh))));
+        for (uint32_t x = 0; x < dstW; x++)
+        {
+            const float uf = (float(x) + 0.5f) / float(dstW) * sx;
+            const uint32_t px =
+                std::min(sw - 1u, uint32_t(std::max(0.0f, (uf - std::floor(uf)) * float(sw))));
+            const size_t srcOff = (size_t(py) * size_t(sw) + size_t(px)) * 4u;
+            const size_t dstOff = (size_t(y) * size_t(dstW) + size_t(x)) * 4u;
+            CompositeStageBufferPixel(stage, stageRgba.data() + srcOff, waveScale, hasContributed,
+                                      accumRgba, dstOff);
+        }
+    }
+    hasContributed = true;
+}
+
+void CompositeNonTracedOverlayStagesToTexture(const Q3ShaderDef &def,
+                                              const EditorAssetSource *assets, EditorTexture &tex)
+{
+    if (!def.isNonTracedOverlay || def.stages.size() <= 1u || tex.width == 0 || tex.height == 0)
+    {
+        return;
+    }
+
+    const size_t pixels = size_t(tex.width) * size_t(tex.height);
+    std::vector<float> accumRgba(pixels * 4u, 0.0f);
+    bool hasContributed = false;
+
+    for (const Q3ShaderStage &stage : def.stages)
+    {
+        CompositeSingleOverlayStage(stage, assets, tex.width, tex.height, accumRgba, hasContributed);
+    }
+
+    if (!hasContributed)
+    {
+        return;
+    }
+
+    tex.rgba.resize(pixels * 4u);
+    for (size_t i = 0; i < pixels; i++)
+    {
+        tex.rgba[i * 4u + 0u] = uint8_t(std::clamp(std::round(accumRgba[i * 4u + 0u]), 0.0f, 255.0f));
+        tex.rgba[i * 4u + 1u] = uint8_t(std::clamp(std::round(accumRgba[i * 4u + 1u]), 0.0f, 255.0f));
+        tex.rgba[i * 4u + 2u] = uint8_t(std::clamp(std::round(accumRgba[i * 4u + 2u]), 0.0f, 255.0f));
+        tex.rgba[i * 4u + 3u] = 255u;
+    }
+}
+
+void ApplyLightImageColorFallback(const Q3ShaderDef &def, const EditorAssetSource *assets,
+                                  EditorTexture &tex)
+{
+    if (tex.hasSurfaceLightColor || def.lightImage.empty())
+    {
+        return;
+    }
+
+    std::vector<uint8_t> lightRgba;
+    uint32_t lw = 0;
+    uint32_t lh = 0;
+    std::string resolvedLight;
+    if (!LoadQ3ImageRgba(assets, def.lightImage, lightRgba, lw, lh, resolvedLight) ||
+        lw == 0 || lh == 0)
+    {
+        return;
+    }
+
+    double sum[3] = { 0.0, 0.0, 0.0 };
+    for (size_t i = 0; i + 3u < lightRgba.size(); i += 4u)
+    {
+        sum[0] += lightRgba[i + 0u];
+        sum[1] += lightRgba[i + 1u];
+        sum[2] += lightRgba[i + 2u];
+    }
+    AssignNormalizedSurfaceLightColor(sum, tex);
+}
+
 void ApplySurfaceEmissionAndMask(const Q3ShaderDef &def, const EditorAssetSource *assets,
                                  EditorTexture &tex)
 {
+    if (!def.emissionMaskMap.empty())
+    {
+        tex.defaultEmissiveTexture = StripQ3ImageExtension(NormalizeQ3AssetPath(def.emissionMaskMap));
+    }
     if (def.surfaceLight <= 0.0f)
     {
+        if (!def.emissionMaskMap.empty() && def.tracedBase)
+        {
+            tex.fullbright.assign(size_t(tex.width) * size_t(tex.height), 0u);
+            TryBakeExplicitEmissionMask(def, assets, tex);
+        }
         return;
     }
 
@@ -1971,25 +2204,7 @@ void ApplySurfaceEmissionAndMask(const Q3ShaderDef &def, const EditorAssetSource
         return;
     }
 
-    if (!tex.hasSurfaceLightColor && !def.lightImage.empty())
-    {
-        std::vector<uint8_t> lightRgba;
-        uint32_t lw = 0;
-        uint32_t lh = 0;
-        std::string resolvedLight;
-        if (LoadQ3ImageRgba(assets, def.lightImage, lightRgba, lw, lh, resolvedLight) &&
-            lw > 0 && lh > 0)
-        {
-            double sum[3] = { 0.0, 0.0, 0.0 };
-            for (size_t i = 0; i + 3u < lightRgba.size(); i += 4u)
-            {
-                sum[0] += lightRgba[i + 0u];
-                sum[1] += lightRgba[i + 1u];
-                sum[2] += lightRgba[i + 2u];
-            }
-            AssignNormalizedSurfaceLightColor(sum, tex);
-        }
-    }
+    ApplyLightImageColorFallback(def, assets, tex);
 
     for (size_t i = 0; i < pixels && i * 4u + 2u < tex.rgba.size(); i++)
     {
@@ -1997,6 +2212,43 @@ void ApplySurfaceEmissionAndMask(const Q3ShaderDef &def, const EditorAssetSource
             std::max({ tex.rgba[i * 4u + 0], tex.rgba[i * 4u + 1], tex.rgba[i * 4u + 2] }) /
             255.0f;
         tex.fullbright[i] = uint8_t(std::clamp(peak * peak * 255.0f, 0.0f, 255.0f));
+    }
+
+    if (tex.defaultEmissiveTexture.empty())
+    {
+        const bool hasUsableDefMap =
+            !def.map.empty() && def.map[0] != '$' && !IsWhiteMapName(def.map);
+        const std::string fallbackMap = hasUsableDefMap ? def.map : tex.name;
+        if (!fallbackMap.empty())
+        {
+            tex.defaultEmissiveTexture = StripQ3ImageExtension(NormalizeQ3AssetPath(fallbackMap));
+        }
+    }
+}
+
+void PopulateEditorTextureShaderWires(const Q3ShaderDef &def, EditorTexture &tex)
+{
+    tex.shaderStages = def.stages;
+    tex.baseStageIndex = def.baseStageIndex;
+    tex.isNonTracedOverlay = def.isNonTracedOverlay;
+    tex.twoSided = def.twoSided;
+    tex.autoSprite = def.autoSprite;
+    tex.autoSprite2 = def.autoSprite2;
+    tex.deformWave = def.deformWave;
+    tex.deformFrequency = def.deformFrequency;
+    tex.deformAmplitude = def.deformAmplitude;
+    if (!def.map.empty())
+    {
+        tex.defaultBaseTexture = StripQ3ImageExtension(NormalizeQ3AssetPath(def.map));
+    }
+    if (!def.decalOverlayMaps.empty())
+    {
+        tex.defaultOverlayTexture =
+            StripQ3ImageExtension(NormalizeQ3AssetPath(def.decalOverlayMaps[0]));
+    }
+    else if (!def.underlayMap.empty())
+    {
+        tex.defaultOverlayTexture = StripQ3ImageExtension(NormalizeQ3AssetPath(def.underlayMap));
     }
 }
 
@@ -2009,7 +2261,9 @@ void ApplyQ3ShaderToEditorTexture(const Q3ShaderDef &def, const EditorAssetSourc
     }
 
     tex.isCutoutUnderlay = def.cutoutFrameUnderlay;
+    PopulateEditorTextureShaderWires(def, tex);
     CompositeUnderlayOntoTexture(def, assets, tex);
+    CompositeNonTracedOverlayStagesToTexture(def, assets, tex);
     ApplyDecalOverlaysToTexture(def, assets, tex);
     ApplySurfaceMaterialMasks(def, tex);
     ApplySurfaceEmissionAndMask(def, assets, tex);

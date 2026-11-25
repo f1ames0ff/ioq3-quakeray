@@ -75,12 +75,28 @@ set(RENDERER_QRAY_BINARY renderer_qray)
 add_library(${RENDERER_QRAY_BINARY} SHARED
     ${SOURCE_DIR}/rendererqray/qray_host.cpp
     ${SOURCE_DIR}/rendererqray/qray_window.cpp
+    ${SOURCE_DIR}/rendererqray/editor/Q3EditorAdapter.cpp
+    ${SOURCE_DIR}/rendererqray/editor/Q3Bsp.cpp
+    ${SOURCE_DIR}/rendererqray/editor/Q3Model.cpp
+    ${SOURCE_DIR}/rendererqray/editor/Q3Shader.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorSession.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorMaterial.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorSettings.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorSpatial.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorOverlayPipeline.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorDtalPipeline.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorSceneRuntime.cpp
+    ${QUAKERAY_SDK_DIR}/editor/EditorLightSelection.cpp
+    ${QUAKERAY_SDK_DIR}/editor/Scene.cpp
+    ${QUAKERAY_SDK_DIR}/editor/Assets.cpp
 )
 
 target_compile_features(${RENDERER_QRAY_BINARY} PRIVATE cxx_std_20)
 target_include_directories(${RENDERER_QRAY_BINARY} PRIVATE
     ${SOURCE_DIR}/renderercommon
     ${SOURCE_DIR}/qcommon
+    ${SOURCE_DIR}/rendererqray/editor
+    ${QUAKERAY_SDK_DIR}/editor
     ${QUAKERAY_SDK_DIR}/Source/Stb
     ${RENDERER_INCLUDE_DIRS}
     ${SDL2_INCLUDE_DIRS}
@@ -172,6 +188,49 @@ if(QR_BUILD_EDITOR AND QR_BUILD_TESTS)
     set_output_dirs(qray_q3_editor_adapter_tests)
     add_test(NAME qray_q3_editor_adapter_tests COMMAND qray_q3_editor_adapter_tests)
     set_tests_properties(qray_q3_editor_adapter_tests PROPERTIES TIMEOUT 300)
+endif()
+
+if(QR_BUILD_TESTS)
+    add_executable(qray_authored_tests
+        ${SOURCE_DIR}/rendererqray/qray_authored_tests.cpp
+        ${SOURCE_DIR}/rendererqray/editor/Q3EditorAdapter.cpp
+        ${SOURCE_DIR}/rendererqray/editor/Q3Bsp.cpp
+        ${SOURCE_DIR}/rendererqray/editor/Q3Model.cpp
+        ${SOURCE_DIR}/rendererqray/editor/Q3Shader.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorSession.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorMaterial.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorSettings.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorSpatial.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorOverlayPipeline.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorDtalPipeline.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorSceneRuntime.cpp
+        ${QUAKERAY_SDK_DIR}/editor/EditorLightSelection.cpp
+        ${QUAKERAY_SDK_DIR}/editor/Scene.cpp
+        ${QUAKERAY_SDK_DIR}/editor/Assets.cpp
+        ${QUAKERAY_SDK_DIR}/Source/Stb/stb_image.cpp
+    )
+    target_compile_features(qray_authored_tests PRIVATE cxx_std_20)
+    target_compile_definitions(qray_authored_tests PRIVATE QR_STATIC)
+    target_include_directories(qray_authored_tests PRIVATE
+        ${SOURCE_DIR}/rendererqray
+        ${SOURCE_DIR}/rendererqray/editor
+        ${QUAKERAY_SDK_DIR}/editor
+        ${QUAKERAY_SDK_DIR}/Include
+        ${QUAKERAY_SDK_DIR}/Source/Stb
+    )
+    if(MSVC)
+        target_compile_options(qray_authored_tests PRIVATE /W3 /EHsc /utf-8 /MP)
+    else()
+        target_compile_options(qray_authored_tests PRIVATE
+            -Wall -Wextra -Wno-unused-function -Wno-missing-field-initializers)
+    endif()
+    set_target_properties(qray_authored_tests PROPERTIES
+        INTERPROCEDURAL_OPTIMIZATION OFF
+        INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+    )
+    set_output_dirs(qray_authored_tests)
+    add_test(NAME qray_authored_tests COMMAND qray_authored_tests)
+    set_tests_properties(qray_authored_tests PROPERTIES TIMEOUT 300)
 endif()
 
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${IOQ3_PREV_IPO})
