@@ -51,8 +51,7 @@ Vulkan instance, device, surface, swapchain and presentation path.
 - Full `refexport_t` wiring, with explicit no-op stubs for features that are not
   implemented yet.
 
-Not implemented yet: IQM/MDR models, BSP inline models (bmodels), mirrors and
-portals, lightmaps/DTAL relighting, authored PBR overrides, and DLSS selection.
+Not implemented yet: IQM/MDR models, portals, and DLSS selection.
 Those are follow-up stages.
 
 ## Build
@@ -377,8 +376,30 @@ emission masks additively (`emissionBlendMode = 2`, `emissionMaxScreenColor = 1.
 
 ## Effect blending
 
-Impact marks in `baseq3` are frequently plain images without a shader script, and several of them
+- Impact marks in `baseq3` are frequently plain images without a shader script, and several of them
 are black-background glow maps stored as JPEG. Treating such an image as an alpha blended decal
 turns its opaque black border into a solid card, so a mark (or sprite) whose texture has no alpha
 channel is blended additively instead. `GL_ZERO GL_ONE_MINUS_SRC_COLOR` darken decals ignore the
 vertex color and darken by their image, which is what the retail shadow blobs expect.
+
+## Standalone Editor, Relief POM, and Local AI PBR Pipeline
+
+`ioq3-rt` compiles the Quake 3 BSP/shader/MD3 format adapter into both `renderer_qray` and
+`quakerayeditor` (shared `EditorSceneRuntime` static scene pipeline in `QuakeRaySDK`), so authored
+materials (`qray.materials.yaml`), custom/DTAL lights (`qray.lights.yaml`), sky presets, and
+global ray-tracing settings render identically in the editor and in the live game.
+
+For upgrading legacy `baseq3` textures into PBR surfaces without external Python tools or NVIDIA
+CUDA dependencies, configure CMake with `-DQR_GGML_SOURCE_DIR=/path/to/ggml` to build the
+out-of-process `quakeray_ai_worker` (`ggml-vulkan`) beside `quakerayeditor`:
+
+- **Four-tab AI material generator (`Upscale`, `De-lighting`, `Normals`, `Depth`):** Stays inside
+  a 75% VRAM cap (tested on AMD Radeon GPUs with 16 GB VRAM, with CPU fallback) and writes unique
+  override TGAs into `<gamedir>/textures/ai_generated/` without modifying original assets.
+- **Texture upgrading stages:** `4x-PBRify` (RealPLKSR `2x`/`4x` upscaling), `StableDelight`
+  (removing baked directional light/glare from `texture_base`), `DeepBump` (crisp detail normal
+  maps), and `Lotus Depth v2` (single-tile FlashAttention with wide wrap/mirror context and tilt
+  removal for `texture_height`, normals, or `texture_gloss`).
+- **Relief Parallax Occlusion Mapping (POM):** `texture_height` and `parallax_scale` bake height
+  into the normal map alpha channel on opaque materials and trace primary and reflection parallax
+  offsets with cavity micro-AO in `QuakeRaySDK`.

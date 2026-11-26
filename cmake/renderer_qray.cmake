@@ -20,6 +20,7 @@ set(QR_NVRHI_SOURCE_DIR "" CACHE PATH "NVRHI source directory")
 if(NOT QR_NVRHI_SOURCE_DIR OR NOT EXISTS "${QR_NVRHI_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "Set -DQR_NVRHI_SOURCE_DIR=/path/to/nvrhi when BUILD_RENDERER_QRAY=ON")
 endif()
+set(QR_GGML_SOURCE_DIR "" CACHE PATH "Optional ggml source directory for quakeray_ai_worker")
 
 # The SDK and NVRHI are static archives linked into the renderer module; keep PIC enabled
 # and avoid inheriting global C IPO across the C++ ray-tracing targets.
